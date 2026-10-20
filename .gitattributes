@@ -1,0 +1,10 @@
+* text=auto eol=lf
+*.pdf binary
+*.wav binary
+*.png binary
+*.ico binary
+*.icns binary
+# Upstream CRLF files keep their bytes, so upstream merges stay clean.
+README_Windows.md -text
+windows/start_with_gui.cmd -text
+mac/SooperLooperAU/OtherSource/PublicUtility/CAAtomic.h -text

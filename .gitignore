@@ -81,3 +81,9 @@ compile
 *.deps/
 *.h.in~
 src/test_plugin/test_engine.py
+
+# Loo-pi
+!/Makefile
+/build/
+/tmp/
+__pycache__/

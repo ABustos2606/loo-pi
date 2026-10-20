@@ -29,7 +29,11 @@
 #include <cmath>
 #include <cstdlib>
 #include <cfloat>
+// Loo-pi: std::min is needed independently of the application's headers.
+#include <algorithm>
+#ifdef LOOPDEBUG
 #include <iostream>
+#endif
 
 using namespace std;
 
@@ -491,9 +495,15 @@ LADSPA_Handle
 instantiateSooperLooper(const LADSPA_Descriptor * Descriptor,
 			unsigned long             SampleRate)
 {
+   // Loo-pi: keep the LADSPA entry point, using the original default.
+   return sl_instantiate(SampleRate, SAMPLE_MEMORY);
+}
+
+// Loo-pi: explicit memory length is safe for concurrent LV2 instances/workers.
+LADSPA_Handle sl_instantiate(unsigned long SampleRate, float sample_seconds)
+{
 
    SooperLooperI * pLS;
-   char * sampmem;
    
    // important note: using calloc to zero all data
    pLS = (SooperLooperI *) calloc(1, sizeof(SooperLooperI));
@@ -507,16 +517,8 @@ instantiateSooperLooper(const LADSPA_Descriptor * Descriptor,
    
    pLS->fSampleRate = (LADSPA_Data)SampleRate;
 
-   pLS->fTotalSecs = SAMPLE_MEMORY;
-   
-   // HACK for the moment!
-   sampmem = getenv("SL_SAMPLE_TIME");
-   if (sampmem != NULL) {
-	   if (sscanf(sampmem, "%f", &pLS->fTotalSecs) != 1) {
-		   pLS->fTotalSecs = SAMPLE_MEMORY;
-	   }
-	   // printf ("Got sample mem: %f\n", pLS->fTotalSecs);
-   }
+   // Loo-pi: supplied by the caller, never from SL_SAMPLE_TIME.
+   pLS->fTotalSecs = sample_seconds;
    
    // we do include the LoopChunk structures in the Buf, so we really
    // get a little less the SAMPLE_MEMORY seconds
@@ -551,6 +553,10 @@ instantiateSooperLooper(const LADSPA_Descriptor * Descriptor,
    pLS->lInputBufSize = 32768;
    pLS->lInputBufMask = pLS->lInputBufSize - 1;
    pLS->pInputBuf = (LADSPA_Data *) calloc(pLS->lInputBufSize, sizeof(LADSPA_Data));
+   // Loo-pi: handle failure like the other allocations.
+   if (pLS->pInputBuf == NULL) {
+	   goto cleanup;
+   }
    pLS->lInputBufWritePos = 0;
    pLS->lInputBufReadPos = 0;
    
@@ -582,6 +588,8 @@ cleanup:
    if (pLS->pLoopChunks) {
 	   free (pLS->pLoopChunks);
    }
+   // Loo-pi: release the instance itself on a partial allocation failure.
+   free(pLS);
    return NULL;
    
 }
@@ -605,6 +613,8 @@ cleanupSooperLooper(LADSPA_Handle Instance) {
 	}
 	
 	//cerr << "******* cleanup SL instance" << endl;
+	// Loo-pi: the latency buffer belongs to this instance too.
+	free(pLS->pInputBuf);
 	
 	
 	free(pLS);

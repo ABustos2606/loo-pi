@@ -403,4 +403,7 @@ extern void sl_set_loop_index (LADSPA_Handle instance, unsigned int index, unsig
 
 extern bool sl_has_loop (const LADSPA_Handle instance);
 
+// Loo-pi: per-instance memory length; no process-wide environment or setter.
+extern LADSPA_Handle sl_instantiate(unsigned long sample_rate, float sample_seconds);
+
 #endif

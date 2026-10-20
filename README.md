@@ -1,115 +1,85 @@
-SooperLooper -- Live Looping Sampler
-Jesse Chappell <jesse@essej.net>
-Copyright 2005
+# Loo-pi
 
-## DESCRIPTION
+A stereo, multi-loop LV2 looper for Peepo and other LV2 hosts: up to 8 loops with record, overdub, multiply, insert, replace, substitute, reverse, undo and redo, solo, one-switch Rec/Dub, and sync to the patch tempo or to another loop. Peepo shows it on a page of its own.
 
-SooperLooper is a live looping sampler capable of immediate loop
-recording, overdubbing, multiplying, reversing and more.  It allows
-for multiple simultaneous multi-channel loops limited only by your
-computer's available memory.  The feature-set and operation was
-inspired by the impressive Gibson Echoplex Digital Pro (EDP). When used
-with a low-latency audio configuration it is capable of truly realtime
-live performance looping.
-	  
-The application is a standalone JACK client with an engine
-controllable via OSC and MIDI.  It also includes a GUI which
-communicates with the engine via OSC (even over a network) for
-user-friendly control on a desktop.  However, this kind of live
-performance looping tool is most effectively used via hardware (midi
-footpedals, etc) and the engine can be run standalone on a computer
-without a monitor.
+Loo-pi is made from **SooperLooper** by Jesse Chappell (https://github.com/essej/sooperlooper). It keeps SooperLooper's looping core and replaces the standalone JACK application around it with an LV2 plugin. GPL-2.0-or-later, like SooperLooper; see [COPYING](COPYING).
 
-SooperLooper is currently supported on Linux/Unix and OS X platforms.
-Macintosh OS X packages are available, and are usable with the newest
-release of [JACK-OS X](http://jackaudio.org/) or as an AU.  
-Future plans include a VST plugin version for both Windows and Mac.
+**Status, 20 October 2026:** Milestone 1 is implemented: one stereo loop with
+Record, Overdub, Rec/Dub, Mute, Undo, Redo, Clear and Trigger; press/release,
+long presses and double taps; dry/loop levels, input gain, threshold, feedback,
+Fade, Safety feedback and bypass. Memory defaults to 40 s, rounded up by the
+core. The plugin retains all 145 permanent ports.
 
-This software is licensed under the GPL, thus the source code is free,
-open and available.  It is fully functional, no nagging, no activation
-keys, nothing to waste but time if you find it doesn't suit your
-needs.  Best of all, because the source is open, there will always be
-someone around who can fix any problems, or add new features.  You are
-welcome to copy it, give copies to your friends, and modify it.  But
-if you find it useful, then please consider making a donation via
-PayPal at http://essej.net/sooperlooper/donate.html .
+Rec/Dub, Overdub, Undo, Mute and Play work through the command control ports.
+The `commands` atom input also accepts the Milestone 1 commands for selected,
+all, or explicit loop 1, including dedicated Record, Redo and Clear. Hold Undo
+or Rec/Dub for more than a second to clear; a Rec/Dub double tap within 0.5 s
+undoes twice. Use momentary host/stomp bindings so releases are delivered.
 
-	  
-## FEATURES
+Loop 1 publishes real state, length, cycle and position. Loops 2 to 8 report
+unallocated (-2); loop-count/selection changes and Next loop await Milestone 2.
+Pause, sync, quantize, varispeed and clock outputs await Milestone 3. Bypass
+uses a 10 ms fade, keeps loop time running, and restores loops that were not
+already muted. Loop audio is lost when the plugin is recreated.
 
-The feature-set is modeled in the spirit of the Echoplex Digital Pro
-(EDP) LoopIII and LoopIV. Detailed descriptions of these features are
-found in the Documentation pages.
+The upstream application's README is [README.sooperlooper.md](README.sooperlooper.md).
+The LV2 build uses only the looping core and new glue; JACK, OSC, MIDI, the GUI,
+RubberBand and libsamplerate application sources are not compiled.
 
-SooperLooper's primary features are listed below:
+- [docs/design.md](docs/design.md): what Loo-pi does, the spec.
+- [docs/implementation-plan.md](docs/implementation-plan.md): ports, code layout, tests and milestones.
+- [docs/peepo-page.md](docs/peepo-page.md): the Loo-pi page in Peepo, and the ports it uses.
 
-- Multiple simultaneous multi-channel loops limited only by available RAM
-- Record, manually triggered, or via input threshold
-- Overdub for adding more audio on top of existing loop
-- Multiply, allows increasing loop length by repeating the initial loop beneath
-- Feedback control allows gradual loop fading, active during overdub/multiply and optionally during playback
-- Replace audio in loop with new material
-- Insert new audio into existing loop
-- Substitute audio in loop with new material, while hearing existing material
-- Reverse loop playback (even during overdub) at any time, or quantized to loop or cycle boundaries
-- Trigger loop playback from start at any time, also supports OneShot triggering which will play the loop once then mute.
-- Mute the loop output at anytime
-- Undo/Redo allows nearly unlimited undo and redo to previous loop states
-- Rate Shift allows arbitrary rate change of loop from 1/4 to 4x normal. Works anytime, even during loop record.
-- Save/Load loops in WAV format
-- Scratch feature allows DJ-like position scratching (work-in-progress)
-- Tempo syncable to MIDI clock, JACK transport, manual or tap tempo, or existing loops.
-- Sync Quantize operations to divisions defined by the tempo, and/or existing loops.
-- Sync Playback can retrigger automatically to maintain external sync during playback
-- SUS (Momentary) operation available for all commands for easy realtime granular
-- Crossfading applied to prevent clicks on loop or edit operation boundaries (crossfade length is adjustable)
-- MIDI Bindings are arbitarily definable and can be configured to emulate existing setup (EDP, etc)
-- Key Bindings are arbitarily definable for the GUI
-- OSC Interface provides the ultimate network-transparent control of the engine
-- Timestretch and pitch shift
+## Build and install
 
-## USAGE
+On Linux (including Debian under WSL), install a C++17 compiler, Make,
+pkg-config and LV2 headers: `build-essential pkg-config lv2-dev` on Debian.
+No network access or autotools step is needed by the build.
 
-Complete documentation on the operation of SooperLooper can be found
-on the website at: http://essej.net/sooperlooper/
+```sh
+make -j2
+make install DESTDIR="$PWD/build/stage"
+make install LV2DIR="$HOME/.lv2"
+```
 
+The bundle is `build/loo-pi.lv2/`, containing `loo-pi.so`, `manifest.ttl` and
+`loo-pi.ttl`. Installation also copies `COPYING`. `PREFIX` defaults to
+`/usr/local`; `LV2DIR` defaults to `$(PREFIX)/lib/lv2`, and `DESTDIR` stages the
+installation without changing the live host. A native Pi build uses the same
+commands; `OPT="-O2 -mcpu=cortex-a76"` selects the Pi 5 CPU.
 
-The main engine is the executable 'sooperlooper'.  Either the GUI
-'slgui' or the console based test client 'slconsole' can be run which
-will communicate with a running sooperlooper engine.  slgui will attempt to 
-start an engine if none are detected running already. 
+Plugin URI: `https://github.com/ABustos2606/loo-pi#loopi`.
+Hosts must provide `urid:map` and `work:schedule`. The worker is required now
+so the host contract already supports adding loops in Milestone 2. The worker
+interface is present; this version schedules no jobs. Initial memory is
+allocated and touched during instantiation, outside the audio thread.
 
-Run 'sooperlooper -h' for command line option help.  Note the midi
-binding file option -m and take a look at the examples oxy8.slb and
-midiwizard.slb for the format to write your own.
+## Check
 
-The engine can be controlled with MIDI via the ALSA sequencer
-interface on Linux and CoreMidi on OS X.  Do learn-style control
-binding by choosing the learn option from the context menu's of a
-button, slider or control.  Control-Middle-clicking on the button or
-slider is a shortcut to start learning.  You can edit, load, and save
-the midi bindings through the MIDI Bindings window in the GUI.
+```sh
+make test                         # also needs python3 and python3-rdflib
+make test SAN=1                   # AddressSanitizer and UBSan, separate build
+make test-timing                  # ten simulated minutes, one stereo loop
+make lint                        # also needs lv2lint on PATH
+make test-hosts                   # jalv, jackd, Ingen, python3-jack-client, numpy
+```
 
-## OS X USAGE
+`LV2LINT=/path/to/lv2lint` selects a local validator. `HOST_ARGS=--ingen=/path/to/ingen`
+selects Ingen; its libraries must be on `LD_LIBRARY_PATH`. Peepo's WSL
+environment can be sourced from its `tools/ingen-spike/env.sh` before running
+the check. The host test starts a private dummy JACK server and engine socket;
+logs stay in `build/host-smoke/`.
 
-For the OS X package, a double-clickable application is provided that
-starts the GUI and and engine for you.  Before starting SooperLooper,
-be sure to start the JACK system using the JackPilot application that
-came with JACK-OSX.  Then use the Routing features of JackPilot to
-connect the inputs and outputs of SooperLooper to the desired places.
-To connect your MIDI device, you need to use a MIDI patchbay.
+The port table lives in `tools/gen_ttl.py`; `make metadata` regenerates Turtle.
+`tests/ttl_check.py` compares parsed Turtle against `lv2/ports.hpp` and checks
+the original index/symbol list. Review changes carefully: saved patches depend
+on these ports. The checked-in metadata lets a normal build run without Python.
 
+Gain and feedback changes use fixed 10 ms linear ramps, independent of host
+slice size; feedback moves in 32-sample steps. Threshold recording follows SooperLooper's positive left-channel
+crossing; the right channel follows its sync at the same sample. Input gain
+affects the recording send, while Dry level controls the untouched dry path.
 
-## BUILD REQUIREMENTS
-| Package       | URL                                                                                                              | Comments                         |
-|---------------|------------------------------------------------------------------------------------------------------------------|----------------------------------|
-| JACK  >= 0.80 | http://jackaudio.org/                                                                                            |                                  |
-| wxWidgets     | https://www.wxwidgets.org/                                                                                       | It should work with the 2.6.x, 2.8, or 3.x versions. For OS X you will want at least the 2.6.1 version of [wxMac](https://wiki.wxwidgets.org/Install#Mac_OS). |
-| liblo >= 0.18 | http://liblo.sourceforge.net/                                                                                    | Lightweight OSC library          |
-| sigc++ >= 2   | https://libsigcplusplus.github.io/libsigcplusplus/                                                               | You probably already have it.... |
-| libsndfile    | http://www.mega-nerd.com/libsndfile/                                                                             |                                  |
-| libsamplerate | http://www.mega-nerd.com/SRC/                                                                                    |                                  |
-| ncurses       | https://invisible-island.net/ncurses/announce.html                                                               | you probably already have it |
-| libxml2       | http://xmlsoft.org/downloads.html                                                                                | same here |
-| RubberBand    | https://www.breakfastquay.com/rubberband/                                                                        |                                  |
-| fftw3         | http://www.fftw.org/                                                                                             |  (needed by rubberband) |
+See [Milestone 1 validation](docs/milestone-1-validation.md) for results and the
+remaining physical Pi, release and Peepo integration checks. Desktop and
+emulated timing do not establish real-time performance on the pedal.
