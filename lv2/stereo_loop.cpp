@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <new>
+#include <sys/mman.h>
 
 extern void activateSooperLooper(LADSPA_Handle);
 extern void cleanupSooperLooper(LADSPA_Handle);
@@ -23,12 +24,20 @@ void touch(float* data, unsigned long count)
     for (unsigned long i = 0; i < count; i += 1024) { memory[i] = 0; }
     if (count) { memory[count - 1] = 0; }
 }
+void destroy(LADSPA_Handle core)
+{
+    if (!core) { return; }
+    auto* state = static_cast<SooperLooperI*>(core);
+    (void)munlock(state->pSampleBuf, state->lBufferSize * sizeof(float));
+    (void)munlock(state->pInputBuf, state->lInputBufSize * sizeof(float));
+    cleanupSooperLooper(core);
+}
 bool supported(Command command)
 {
     switch (command) {
     case Event::RECORD: case Event::OVERDUB: case Event::RECORD_OR_OVERDUB:
     case Event::MUTE: case Event::UNDO: case Event::REDO: case Event::UNDO_ALL:
-    case Event::REDO_ALL: case Event::TRIGGER: return true;
+    case Event::REDO_ALL: case Event::TRIGGER: case Event::RECORD_OVERDUB_END_SOLO: return true;
     default: return false;
     }
 }
@@ -61,12 +70,15 @@ StereoLoop::StereoLoop(double rate, uint32_t maximum, float seconds)
     for (uint32_t channel = 0; channel < 2; ++channel) {
         cores_[channel] = sl_instantiate(static_cast<unsigned long>(rate), seconds);
         if (!cores_[channel]) {
-            for (auto core : cores_) { if (core) { cleanupSooperLooper(core); } }
+            for (auto core : cores_) { destroy(core); }
             throw std::bad_alloc();
         }
         auto* state = static_cast<SooperLooperI*>(cores_[channel]);
         touch(state->pSampleBuf, state->lBufferSize);
         touch(state->pInputBuf, state->lInputBufSize);
+        // Best effort only: hosts commonly have a small RLIMIT_MEMLOCK.
+        (void)mlock(state->pSampleBuf, state->lBufferSize * sizeof(float));
+        (void)mlock(state->pInputBuf, state->lInputBufSize * sizeof(float));
         auto& values = ports_[channel];
         values[WetLevel] = values[Feedback] = values[Rate] = 1;
         values[Multi] = -1;
@@ -84,7 +96,16 @@ StereoLoop::StereoLoop(double rate, uint32_t maximum, float seconds)
     }
 }
 StereoLoop::~StereoLoop()
-{ for (auto core : cores_) { if (core) { cleanupSooperLooper(core); } } }
+{
+    for (auto core : cores_) { destroy(core); }
+}
+
+void StereoLoop::finish_state() noexcept
+{
+    // Looper::finish_state: end a currently active editing operation.
+    if (output(State) == LooperStateRecording) { enqueue(Event::RECORD); }
+    else if (output(State) == LooperStateOverdubbing) { enqueue(Event::OVERDUB); }
+}
 
 void StereoLoop::configure(const LoopSettings& value) noexcept
 {
@@ -128,7 +149,7 @@ void StereoLoop::event(Command command, bool press) noexcept
         const bool long_press = held_[cmd] && frames_ - down_[cmd] > uint64_t(rate_);
         if (long_press && (output(State) != LooperStatePlaying || command == Event::UNDO || command == Event::REDO)) {
             auto requested = command;
-            if (command == Event::UNDO || command == Event::RECORD_OR_OVERDUB) { requested = Event::UNDO_ALL; }
+            if (command == Event::UNDO || command == Event::RECORD_OR_OVERDUB || command == Event::RECORD_OVERDUB_END_SOLO) { requested = Event::UNDO_ALL; }
             else if (command == Event::REDO) { requested = Event::REDO_ALL; }
             enqueue(requested);
         }

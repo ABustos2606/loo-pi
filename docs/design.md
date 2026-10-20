@@ -159,6 +159,6 @@ Settled with the user on 19 October 2026:
 - [x] Fork SooperLooper as Loo-pi. License GPL-2.0-or-later.
 - [ ] Milestone 0: the plain Makefile, the LV2 glue and `.ttl` with the full port list, building only the core. Loo-pi loads in jalv and in Ingen under WSL. Implemented; desktop validation passes, physical Pi and release checks remain ([evidence](milestone-0-validation.md)).
 - [ ] Milestone 1: one stereo loop through the multi-loop layer: Record, Overdub, Rec/Dub, Mute, Undo, Redo, Clear, Trigger, press, release and long press, levels, feedback, threshold, bypass, the real-time fixes. Implemented; desktop and emulated arm64 checks pass, physical Pi and release checks remain ([evidence](milestone-1-validation.md)).
-- [ ] Milestone 2: several loops: Loops and the worker, selected loop and targets, Solo, Next and Previous, the Commands input, the per-loop outputs. Peepo's Loo-pi page, first version.
+- [ ] Milestone 2: several loops: Loops and the worker, selected loop and targets, Solo, Next and Previous, the Commands input, the per-loop outputs. Peepo's Loo-pi page, first version. Implemented; physical Pi/xrun, telemetry and release gates remain ([evidence](milestone-2-validation.md)).
 - [ ] Milestone 3: the rest of the commands (Multiply, Insert, Replace, Substitute, Reverse, Once, Pause, Delay), Quantize, sync to Tempo and to a loop, Rate, the clock outputs. The page complete, with stomp binding.
 - [ ] Milestone 4: saving loops, then decide separate loop outputs and MIDI.

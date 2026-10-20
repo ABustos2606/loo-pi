@@ -47,7 +47,7 @@ def check(bundle):
     require(set(graph.objects(plugin, LV2.requiredFeature)) == {URID.map, WORK.schedule}, "required features")
     require(WORK.interface in set(graph.objects(plugin, LV2.extensionData)), "worker interface")
     require(LV2.hardRTCapable in set(graph.objects(plugin, LV2.optionalFeature)), "RT declaration")
-    require(int(graph.value(plugin, LV2.minorVersion)) == 1 and int(graph.value(plugin, LV2.microVersion)) == 0, "version")
+    require(int(graph.value(plugin, LV2.minorVersion)) == 2 and int(graph.value(plugin, LV2.microVersion)) == 0, "version")
     require(URIRef("http://lv2plug.in/ns/ext/options#options") in set(graph.objects(plugin, LV2.optionalFeature)), "host block options")
     actual, symbols = {}, set()
     for node in graph.objects(plugin, LV2.port):

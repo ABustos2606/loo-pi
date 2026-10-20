@@ -3,14 +3,13 @@
 #pragma once
 #include "ports.hpp"
 #include "stereo_loop.hpp"
+#include "loop_set.hpp"
 #include <lv2/atom/atom.h>
 #include <array>
 #include <cmath>
 #include <cstring>
 
 namespace loopi {
-// The single-loop subset is needed in M1 for dedicated Record, Redo and
-// Clear, which have no control ports. M2 extends routing to additional loops.
 class CommandEvents {
 public:
     CommandEvents(const void* data, uint32_t sequence_type, uint32_t int_type, uint32_t frame_type, uint32_t frames) noexcept
@@ -24,7 +23,7 @@ public:
         cursor_ = static_cast<const uint8_t*>(data) + sizeof(sequence);
         remaining_ = sequence.atom.size - sizeof(sequence.body);
     }
-    bool next(uint32_t& frame, Command& command, bool& press) noexcept
+    bool next(uint32_t& frame, uint32_t& target, uint32_t& command, bool& press) noexcept
     {
         while (remaining_ >= sizeof(LV2_Atom_Event)) {
             LV2_Atom_Event event;
@@ -38,12 +37,12 @@ public:
                 event.time.frames < 0 || uint64_t(event.time.frames) >= frames_) { continue; }
             int32_t value;
             std::memcpy(&value, body, sizeof(value));
-            // 0 selected, 1 all, 2 explicit loop 1; other targets wait for M2.
-            if (value < 0 || value / 256 > 2) { continue; }
+            if (value < 0 || value / 256 > int32_t(kMaxLoops + 1)) { continue; }
             const int32_t number = (value % 256) / 2;
-            if (number >= SooperLooper::Event::LAST_COMMAND) { continue; }
+            if (number >= SooperLooper::Event::LAST_COMMAND && number != int32_t(kNextLoop) && number != int32_t(kPreviousLoop)) { continue; }
             frame = uint32_t(event.time.frames);
-            command = static_cast<Command>(number);
+            target = uint32_t(value / 256);
+            command = uint32_t(number);
             press = (value & 1) != 0;
             return true;
         }
@@ -56,19 +55,19 @@ private:
 
 class CommandControls {
 public:
-    void update(const std::array<void*, index(Port::count)>& ports, StereoLoop& loop) noexcept
+    void update(const std::array<void*, index(Port::count)>& ports, LoopSet& loop) noexcept
     {
-        constexpr std::array<Port, 5> inputs{Port::rec_dub, Port::overdub, Port::undo, Port::mute, Port::trigger};
-        constexpr std::array<Command, 5> commands{SooperLooper::Event::RECORD_OR_OVERDUB,
+        constexpr std::array<Port, 6> inputs{Port::rec_dub, Port::overdub, Port::undo, Port::mute, Port::trigger, Port::next_loop};
+        constexpr std::array<uint32_t, 6> commands{SooperLooper::Event::RECORD_OR_OVERDUB,
             SooperLooper::Event::OVERDUB, SooperLooper::Event::UNDO,
-            SooperLooper::Event::MUTE, SooperLooper::Event::TRIGGER};
+            SooperLooper::Event::MUTE, SooperLooper::Event::TRIGGER, kNextLoop};
         for (uint32_t i = 0; i < inputs.size(); ++i) {
             const auto* input = static_cast<const float*>(ports[index(inputs[i])]);
             const bool down = input && std::isfinite(*input) && *input >= 0.5f;
-            if (down != previous_[i]) { loop.event(commands[i], down); previous_[i] = down; }
+            if (down != previous_[i]) { loop.event(0, commands[i], down); previous_[i] = down; }
         }
     }
 private:
-    std::array<bool, 5> previous_{};
+    std::array<bool, 6> previous_{};
 };
 } // namespace loopi

@@ -312,6 +312,12 @@ tag and Peepo's pinned build/overlay follow-up remain outstanding; see
 5. In Peepo: the Loo-pi page, first version: loop row, quick commands, COMMANDS and LEVELS sections, telemetry and command events ([peepo-page.md](peepo-page.md)).
 - **Done when:** the tests pass, four loops play on the Pi from the page and stomps, and the telemetry rate is measured. Tag `v0.2.0`.
 
+Implemented 20 October 2026 in Loo-pi and Peepo. Worker ownership, targets,
+Solo, navigation, timed commands, all telemetry groups and the first page are
+implemented. Physical Pi/xrun and telemetry measurements, the release tag and
+Peepo's pinned release build remain outstanding; see
+[milestone-2-validation.md](milestone-2-validation.md).
+
 ### Milestone 3: everything else Beebo's Loopler does
 
 1. Multiply, Insert, Replace, Substitute, Reverse, Once, Pause, Delay, with their special endings.

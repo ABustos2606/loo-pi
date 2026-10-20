@@ -14,16 +14,17 @@ namespace loopi {
 namespace {
 struct Instance {
     std::array<void*, index(Port::count)> ports{};
-    StereoLoop loop;
+    LoopSet loop;
     CommandControls commands;
     std::array<std::vector<float>, 4> scratch;
     uint32_t maximum, ramp_samples;
     uint32_t sequence_type, int_type, frame_type;
     Ramp dry;
     bool configured = false;
+    uint32_t selected_control = 0;
 
-    Instance(double rate, uint32_t size, const LV2_URID_Map& map)
-        : loop(rate, size), maximum(size), ramp_samples(uint32_t(rate * 0.01)),
+    Instance(double rate, uint32_t size, const LV2_URID_Map& map, const LV2_Worker_Schedule& schedule)
+        : loop(rate, size, schedule), maximum(size), ramp_samples(uint32_t(rate * 0.01)),
           sequence_type(map.map(map.handle, LV2_ATOM__Sequence)),
           int_type(map.map(map.handle, LV2_ATOM__Int)), frame_type(map.map(map.handle, LV2_ATOM__frameTime))
     { for (auto& buffer : scratch) { buffer.resize(size); } }
@@ -40,20 +41,20 @@ LV2_Handle instantiate(const LV2_Descriptor*, double rate, const char*, const LV
 {
     const LV2_URID_Map* map = nullptr;
     const LV2_Options_Option* options = nullptr;
-    bool schedule = false;
+    const LV2_Worker_Schedule* schedule = nullptr;
     for (auto f = features; f && *f; ++f) {
         if (!(*f)->URI) { continue; }
         if (!std::strcmp((*f)->URI, LV2_URID__map)) {
             map = static_cast<const LV2_URID_Map*>((*f)->data);
         } else if (!std::strcmp((*f)->URI, LV2_WORKER__schedule)) {
             const auto* data = static_cast<const LV2_Worker_Schedule*>((*f)->data);
-            schedule = data && data->schedule_work;
+            schedule = data && data->schedule_work ? data : nullptr;
         } else if (!std::strcmp((*f)->URI, LV2_OPTIONS__options)) {
             options = static_cast<const LV2_Options_Option*>((*f)->data);
         }
     }
     if (!map || !map->map || !schedule || !std::isfinite(rate) || rate < 8000 || rate > 384000) { return nullptr; }
-    try { return new Instance(rate, scratch_size(*map, options), *map); }
+    try { return new Instance(rate, scratch_size(*map, options), *map, *schedule); }
     catch (...) { return nullptr; }
 }
 
@@ -69,18 +70,23 @@ void run(LV2_Handle handle, uint32_t frames)
     // Zero frames publish telemetry without consuming edges or advancing time.
     // Never call the old core with zero samples (its deltas assume n > 0).
     if (frames) {
-        LoopSettings settings;
-        settings.level = self.control(Port::l1_level, 1);
-        settings.input_gain = self.control(Port::l1_in_gain, 1);
-        settings.threshold = self.control(Port::l1_thresh, 0);
-        settings.feedback = self.control(Port::l1_feedback, 1);
-        settings.fade_ms = self.control(Port::fade, 1.3f, 0, 50);
-        settings.safety_feedback = self.control(Port::safety_fb, 1) >= 0.5f;
-        settings.play_feedback = self.control(Port::l1_play_fb, 0) >= 0.5f;
-        self.loop.configure(settings);
+        self.loop.count(uint32_t(self.control(Port::loops, 1, 1, 8)), self.control(Port::loop_secs, 40, 10, 300));
+        const auto selection = uint32_t(self.control(Port::selected, 1, 1, 8));
+        // Commands may select a loop without changing the saved input value.
+        if (selection != self.selected_control) { self.loop.select(selection); self.selected_control = selection; }
+        for (uint32_t n = 0; n < kMaxLoops; ++n) {
+            const auto base = kLoopBase + n * kLoopStride;
+            const auto ctl = [&](uint32_t p, float fallback) { return self.control(static_cast<Port>(base + p), fallback); };
+            LoopSettings settings;
+            settings.level = ctl(0, 1); settings.input_gain = ctl(1, 1);
+            settings.threshold = ctl(2, 0); settings.feedback = ctl(3, 1);
+            settings.fade_ms = self.control(Port::fade, 1.3f, 0, 50);
+            settings.safety_feedback = self.control(Port::safety_fb, 1) >= .5f;
+            settings.play_feedback = ctl(6, 0) >= .5f;
+            self.loop.configure(n, settings, self.control(Port::enabled, 1) >= .5f);
+        }
         self.dry.set(self.control(Port::dry_level, 1), self.configured ? self.ramp_samples : 0);
         self.configured = true;
-        self.loop.enabled(self.control(Port::enabled, 1) >= 0.5f);
         self.commands.update(self.ports, self.loop);
     }
     const auto* left = static_cast<const float*>(self.ports[index(Port::in_l)]);
@@ -99,7 +105,7 @@ void run(LV2_Handle handle, uint32_t frames)
             self.scratch[0][i] = left && std::isfinite(left[offset + i]) ? left[offset + i] : 0;
             self.scratch[1][i] = right && std::isfinite(right[offset + i]) ? right[offset + i] : 0;
         }
-        self.loop.process(self.scratch[0].data(), self.scratch[1].data(), self.scratch[2].data(), self.scratch[3].data(), count);
+        nonfinite |= self.loop.process(self.scratch[0].data(), self.scratch[1].data(), self.scratch[2].data(), self.scratch[3].data(), count);
         for (uint32_t i = 0; i < count; ++i) {
             const auto dry = self.dry.next();
             const float l = self.scratch[0][i] * dry + self.scratch[2][i];
@@ -115,37 +121,38 @@ void run(LV2_Handle handle, uint32_t frames)
     };
     CommandEvents events(self.ports[index(Port::commands)], self.sequence_type, self.int_type, self.frame_type, frames);
     uint32_t frame;
-    Command command;
+    uint32_t target, command;
     bool press;
-    while (events.next(frame, command, press)) {
+    while (events.next(frame, target, command, press)) {
         if (frame < offset) { continue; } // Ignore out-of-order timestamps.
         render(frame);
-        self.loop.event(command, press);
+        self.loop.event(target, command, press);
     }
     render(frames);
     if (nonfinite) {
         if (out_l) { std::fill_n(out_l, frames, 0); }
         if (out_r) { std::fill_n(out_r, frames, 0); }
-        self.loop.recover();
+        // Individual nonfinite loop returns are recovered in LoopSet.
+        // A finite sum can still overflow; silence this host slice.
     }
-    self.output(index(Port::selected_out), 1);
-    self.output(index(Port::soloed), 0);
-    self.output(index(Port::free_mem), self.loop.output(SooperLooper::LoopFreeMemory));
+    self.output(index(Port::selected_out), float(self.loop.selected()));
+    self.output(index(Port::soloed), float(self.loop.soloed()));
+    self.output(index(Port::free_mem), self.loop.output(self.loop.selected() - 1, SooperLooper::LoopFreeMemory));
     constexpr std::array<SooperLooper::OutputPort, 6> telemetry{SooperLooper::State, SooperLooper::NextState,
         SooperLooper::Waiting, SooperLooper::LoopLength, SooperLooper::CycleLength, SooperLooper::LoopPosition};
     for (uint32_t n = 0; n < kMaxLoops; ++n) {
         const uint32_t base = kLoopBase + n * kLoopStride;
         for (uint32_t i = 0; i < telemetry.size(); ++i) {
-            self.output(base + 8 + i, n ? (i < 2 ? -2.0f : 0.0f) : self.loop.output(telemetry[i]));
+            self.output(base + 8 + i, self.loop.output(n, telemetry[i]));
         }
     }
 }
 
 void cleanup(LV2_Handle handle) { delete static_cast<Instance*>(handle); }
-// Reserved until M2. No jobs are scheduled by the single-loop layer.
-LV2_Worker_Status work(LV2_Handle, LV2_Worker_Respond_Function, LV2_Worker_Respond_Handle, uint32_t, const void*)
-{ return LV2_WORKER_ERR_UNKNOWN; }
-LV2_Worker_Status response(LV2_Handle, uint32_t, const void*) { return LV2_WORKER_ERR_UNKNOWN; }
+LV2_Worker_Status work(LV2_Handle, LV2_Worker_Respond_Function respond, LV2_Worker_Respond_Handle handle, uint32_t size, const void* data)
+{ return LoopSet::work(respond, handle, size, data); }
+LV2_Worker_Status response(LV2_Handle handle, uint32_t size, const void* data)
+{ return static_cast<Instance*>(handle)->loop.response(size, data); }
 const LV2_Worker_Interface worker{work, response, nullptr};
 const void* extension_data(const char* uri)
 { return !std::strcmp(uri, LV2_WORKER__interface) ? &worker : nullptr; }

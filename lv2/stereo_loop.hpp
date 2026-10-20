@@ -40,6 +40,8 @@ public:
     uint64_t frames() const noexcept { return frames_; }
     bool stereo_locked() const noexcept;
     void recover() noexcept;
+    void hit(Command command) noexcept { enqueue(command); }
+    void finish_state() noexcept;
 
 private:
     struct Request { Command command = SooperLooper::Event::UNKNOWN; bool bypass = false; };

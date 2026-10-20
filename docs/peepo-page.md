@@ -77,21 +77,39 @@ From the manual: commands act on the selected loop, all loops or a given loop; g
 
 **Command events.** Ingen appends any value set on an atom sequence input as an event in the next block (`reference/upstream/ingen/src/server/events/SetPortValue.cpp:114`). The page sets the `commands` port to an `atom:Int`:
 
-Milestone 1 already accepts Record, Overdub, Rec/Dub, Mute, Undo, Redo,
-Clear (Undo all), Redo all and Trigger for targets selected, all and loop 1.
-This subset was brought forward to expose commands without dedicated control
-ports. Other targets and commands remain inert until their milestones.
-Loop 1's telemetry is live; loops 2 to 8 still report unallocated. The page
-itself and routing to several loops remain Milestone 2 work.
+Milestone 2 accepts the implemented recording/history/mute/trigger commands,
+Solo and its navigation variants, and targets selected, all and loops 1 to 8.
+All eight loop telemetry groups are live when allocated. Unsupported Milestone
+3 commands are ignored. Peepo sends typed `xsd:int` literals through Ingen's
+Sratom reader, which produces `atom:Int`; the compact integer contract is kept.
 
 ```
 value = target * 256 + command * 2 + press
     target:  0 selected, 1 all, 1 + N for loop N (1 to 8)
-    command: SooperLooper's Event::command_t number (src/event.hpp)
+    command: SooperLooper's Event::command_t number (src/event.hpp),
+             64 Next loop, 65 Previous loop
     press:   1 for press, 0 for release
 ```
 
-An int is the smallest change to Peepo's adapter, which already sends floats and URIs. If the adapter can send `atom:Object`s, a `patch:Set`-style object is cleaner; decide in milestone 2, before any patch depends on it (events are not saved, so this can change later without breaking patches).
+Next and Previous are controls in upstream `Engine`, rather than entries in
+`Event::command_t`. Loo-pi reserves wire IDs 64 and 65 outside that enum;
+these IDs are never cast to the upstream enum. Only their presses navigate.
+Targets for absent loops are ignored, including navigation with an invalid target.
+
+`selected_out` is authoritative after navigation commands. Peepo reflects a
+changed selection into the `selected` setting so it is saved, and a later tap
+on the old setting value still reaches the plugin. Touch commands pin the
+selected target until release, including release after a lost press or leaving
+the page. Telemetry updates widgets without rebuilding them. Ingen broadcasts
+changes only, so stable states do not expire; subscriptions clear on leaving
+the page or disconnecting. Transient atom input values never dirty the graph.
+
+The first page version includes COMMANDS, LEVELS, the loop row, quick commands,
+add/remove and Next/Previous. Future commands and Sync switches are disabled.
+Dry level, Fade, Safety feedback and Loop memory are temporarily in the
+scrolling LEVELS section until GLOBAL arrives in Milestone 3. The two section
+pills fit in the header; RATE/GLOBAL and stomp binding remain Milestone 3.
+The existing momentary command-control stomp assignments remain usable.
 
 ### What the page reads
 

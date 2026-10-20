@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (c) 2026 Alejandro Bustos
-"""Milestone 1 host checks, adapted from Discipline's private JACK test.
+"""Milestone 2 host checks, adapted from Discipline's private JACK test.
 
 Needs jackd, jalv, Ingen, python3-jack-client and numpy. Leaves running user
 servers alone. Logs are written under build/host-smoke/.
@@ -206,8 +206,8 @@ def main():
             wait_for(lambda: observed == [0, 0], "Ingen long Undo Clear")
             source_level[:] = [0.125, -0.25]
 
-            def atom(command, press=True):
-                value = command * 2 + int(press)
+            def atom(command, press=True, target=0):
+                value = target * 256 + command * 2 + int(press)
                 protocol.request("Set", 'patch:subject <ingen:/main/loopi/commands> ; '
                                  f'patch:property ingen:value ; patch:value "{value}"^^xsd:int')
 
@@ -228,11 +228,34 @@ def main():
             atom(1, False)
             atom(17)  # Clear / Undo all.
             wait_for(lambda: observed == [0, 0], "Ingen atom Clear")
+            # Real Ingen worker allocation, targets, mix, solo and removal.
+            control("loop_secs", 10)
+            control("loops", 4)
+            time.sleep(0.4)
+            source_level[:] = [0.03125, -0.0625]
+            atom(5, target=1)
+            time.sleep(0.2)
+            atom(5, False, target=1)
+            atom(5, target=1)
+            time.sleep(0.05)
+            atom(5, False, target=1)
+            source_level[:] = [0, 0]
+            wait_for(lambda: all(abs(a-b)<0.00001 for a,b in zip(observed,(0.125,-0.25))), "Ingen four-loop atom mix")
+            atom(24, target=3)
+            atom(24, False, target=3)
+            wait_for(lambda: all(abs(a-b)<0.00001 for a,b in zip(observed,(0.03125,-0.0625))), "Ingen explicit loop 2 solo")
+            atom(24, target=3)
+            atom(24, False, target=3)
+            wait_for(lambda: all(abs(a-b)<0.00001 for a,b in zip(observed,(0.125,-0.25))), "Ingen solo restore")
+            control("loops", 1)
+            wait_for(lambda: all(abs(a-b)<0.00001 for a,b in zip(observed,(0.03125,-0.0625))), "Ingen remove playing loops")
+            atom(17)
+            wait_for(lambda: observed == [0,0], "Ingen final clear")
             source_level[:] = [0.125, -0.25]
             protocol.socket.close()
             protocol = None
             stop(engine)
-            print(f"PASS Ingen: control/atom record/play, Redo, Clear, bypass restore, {threads} threads", flush=True)
+            print(f"PASS Ingen: four-loop worker/mix/targets/solo/remove, controls/atoms/bypass, {threads} threads", flush=True)
     finally:
         if protocol:
             protocol.socket.close()

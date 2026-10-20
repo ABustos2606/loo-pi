@@ -52,8 +52,8 @@ void audio(const LV2_Descriptor* d)
     for (auto p : {Port::in_l, Port::in_r, Port::out_l, Port::out_r, Port::cycle_clock, Port::loop_clock}) {
         d->connect_port(host.handle, index(p), host[p].data());
     }
-    // Reserved multi-loop and M3 controls remain inert in Milestone 1.
-    host[Port::pause][0] = host[Port::next_loop][0] = host[Port::loops][0] = host[Port::selected][0] = 8;
+    // M3 controls remain inert; multi-loop routing is checked separately.
+    host[Port::pause][0] = 1;
     host.run(128);
     check(host[Port::selected_out][0] == 1 && host[Port::soloed][0] == 0, "idle selection");
     check(host[Port::free_mem][0] >= 40 && host[Port::free_mem][0] < 80, "40 second memory rounded up");

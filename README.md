@@ -4,23 +4,28 @@ A stereo, multi-loop LV2 looper for Peepo and other LV2 hosts: up to 8 loops wit
 
 Loo-pi is made from **SooperLooper** by Jesse Chappell (https://github.com/essej/sooperlooper). It keeps SooperLooper's looping core and replaces the standalone JACK application around it with an LV2 plugin. GPL-2.0-or-later, like SooperLooper; see [COPYING](COPYING).
 
-**Status, 20 October 2026:** Milestone 1 is implemented: one stereo loop with
-Record, Overdub, Rec/Dub, Mute, Undo, Redo, Clear and Trigger; press/release,
-long presses and double taps; dry/loop levels, input gain, threshold, feedback,
-Fade, Safety feedback and bypass. Memory defaults to 40 s, rounded up by the
-core. The plugin retains all 145 permanent ports.
+**Status, 20 October 2026:** Milestone 2 is implemented: up to eight stereo
+loops, worker allocation/removal, selected/all/explicit targets, Solo, Next
+and Previous, sample-timed atom commands and per-loop telemetry. Peepo has a
+first Loo-pi page with loop cards, quick commands, COMMANDS and LEVELS.
 
-Rec/Dub, Overdub, Undo, Mute and Play work through the command control ports.
-The `commands` atom input also accepts the Milestone 1 commands for selected,
-all, or explicit loop 1, including dedicated Record, Redo and Clear. Hold Undo
-or Rec/Dub for more than a second to clear; a Rec/Dub double tap within 0.5 s
-undoes twice. Use momentary host/stomp bindings so releases are delivered.
+Record, Overdub, Rec/Dub, Mute, Undo, Redo, Clear and Trigger retain their
+press/release, long-press and double-tap rules. Hold Undo or Rec/Dub for more
+than a second to clear; a Rec/Dub double tap within 0.5 s undoes twice. Use
+momentary host/stomp bindings so releases are delivered. Next loop also works
+through its command control. The atom encoding and navigation IDs are in
+[the page contract](docs/peepo-page.md#the-contract).
 
-Loop 1 publishes real state, length, cycle and position. Loops 2 to 8 report
-unallocated (-2); loop-count/selection changes and Next loop await Milestone 2.
-Pause, sync, quantize, varispeed and clock outputs await Milestone 3. Bypass
-uses a 10 ms fade, keeps loop time running, and restores loops that were not
-already muted. Loop audio is lost when the plugin is recreated.
+`loops` adds memory on the LV2 worker; pending or failed allocations report
+state -2. Removing loops fades their returns over 10 ms before freeing them
+on the worker. `loop_secs` affects newly allocated loops; loop 1 initially
+gets 40 s, rounded up by the core. Settings and all 145 port identities are
+preserved. Loop audio is lost when the plugin is recreated.
+
+Pause, sync, quantize, varispeed and clocks await Milestone 3; the page shows
+future commands disabled. Bypass keeps every loop running and restores its
+previous mute state with a 10 ms fade. The physical Pi xrun/telemetry gate and
+release tag remain pending; see [Milestone 2 validation](docs/milestone-2-validation.md).
 
 The upstream application's README is [README.sooperlooper.md](README.sooperlooper.md).
 The LV2 build uses only the looping core and new glue; JACK, OSC, MIDI, the GUI,
@@ -49,9 +54,7 @@ installation without changing the live host. A native Pi build uses the same
 commands; `OPT="-O2 -mcpu=cortex-a76"` selects the Pi 5 CPU.
 
 Plugin URI: `https://github.com/ABustos2606/loo-pi#loopi`.
-Hosts must provide `urid:map` and `work:schedule`. The worker is required now
-so the host contract already supports adding loops in Milestone 2. The worker
-interface is present; this version schedules no jobs. Initial memory is
+Hosts must provide `urid:map` and `work:schedule`. The worker allocates and frees additional loops. Initial memory is
 allocated and touched during instantiation, outside the audio thread.
 
 ## Check
@@ -59,7 +62,7 @@ allocated and touched during instantiation, outside the audio thread.
 ```sh
 make test                         # also needs python3 and python3-rdflib
 make test SAN=1                   # AddressSanitizer and UBSan, separate build
-make test-timing                  # ten simulated minutes, one stereo loop
+make test-timing                  # ten simulated minutes each, one and eight stereo loops
 make lint                        # also needs lv2lint on PATH
 make test-hosts                   # jalv, jackd, Ingen, python3-jack-client, numpy
 ```
@@ -80,6 +83,6 @@ slice size; feedback moves in 32-sample steps. Threshold recording follows Soope
 crossing; the right channel follows its sync at the same sample. Input gain
 affects the recording send, while Dry level controls the untouched dry path.
 
-See [Milestone 1 validation](docs/milestone-1-validation.md) for results and the
+See [Milestone 2 validation](docs/milestone-2-validation.md) for results and the
 remaining physical Pi, release and Peepo integration checks. Desktop and
 emulated timing do not establish real-time performance on the pedal.
