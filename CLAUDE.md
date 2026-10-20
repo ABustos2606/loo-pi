@@ -37,7 +37,7 @@ Peepo is a guitar pedal built on a Raspberry Pi 5 (2 GB, Debian 12 arm64) runnin
 - **Ingen's own block bypass never calls `run()`.** A looper bypassed that way stops dead. Loo-pi has an `lv2:enabled` port and Peepo's overlay marks it `"bypass": "port"`.
 - **Ingen supports the LV2 worker** (`work:schedule`); that is where loops are allocated and freed.
 - **Unpatched inputs read silence.** A plugin can't tell whether a port is connected; don't guess.
-- **Loops are not saved with patches** until LV2 state is added (an open question in the spec).
+- **Loops are saved with patches** through LV2 state (Milestone 4): each loop's audio is a WAV file beside the state. `save()` runs on the host's thread while `run()` goes on; `restore()` runs at instantiation. The state keys (`#loops`, `#loopN`, `#loopN_cycle`, `#loopN_memory`) are as permanent as port symbols.
 - Everything a user sets is a control port, so patches save it.
 
 ## Rules

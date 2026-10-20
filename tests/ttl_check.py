@@ -19,6 +19,7 @@ PPROPS = Namespace("http://lv2plug.in/ns/ext/port-props#")
 UNITS = Namespace("http://lv2plug.in/ns/extensions/units#")
 WORK = Namespace("http://lv2plug.in/ns/ext/worker#")
 URID = Namespace("http://lv2plug.in/ns/ext/urid#")
+STATE = Namespace("http://lv2plug.in/ns/ext/state#")
 
 
 def require(condition, message):
@@ -46,8 +47,10 @@ def check(bundle):
     require(graph.value(plugin, DOAP.license) == URIRef("https://spdx.org/licenses/GPL-2.0-or-later"), "license")
     require(set(graph.objects(plugin, LV2.requiredFeature)) == {URID.map, WORK.schedule}, "required features")
     require(WORK.interface in set(graph.objects(plugin, LV2.extensionData)), "worker interface")
+    require(STATE.interface in set(graph.objects(plugin, LV2.extensionData)), "state interface")
+    require({STATE.mapPath, STATE.makePath, STATE.freePath} <= set(graph.objects(plugin, LV2.optionalFeature)), "state path features")
     require(LV2.hardRTCapable in set(graph.objects(plugin, LV2.optionalFeature)), "RT declaration")
-    require(int(graph.value(plugin, LV2.minorVersion)) == 3 and int(graph.value(plugin, LV2.microVersion)) == 0, "version")
+    require(int(graph.value(plugin, LV2.minorVersion)) == 4 and int(graph.value(plugin, LV2.microVersion)) == 0, "version")
     require(URIRef("http://lv2plug.in/ns/ext/options#options") in set(graph.objects(plugin, LV2.optionalFeature)), "host block options")
     actual, symbols = {}, set()
     for node in graph.objects(plugin, LV2.port):

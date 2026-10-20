@@ -119,7 +119,7 @@ What Loo-pi gives the page:
 - **Eight loops at 80 s would be 256 MB.** So loops are allocated when they are added, not all at once, and Loop memory sets the length of a newly added loop (default 40 s, 16 MB stereo, **tune**).
 - Adding a loop allocates and touches its memory in an **LV2 worker** (Ingen supports `work:schedule`, `src/server/LV2Block.cpp:473`), never in `run()`. The loop appears when the worker answers. Removing a loop frees it the same way.
 - The core's `getenv("SL_SAMPLE_TIME")` is replaced with a length passed in by Loo-pi.
-- **Loops are lost when a patch reloads** in the first milestones, as with Discipline and Clouds. Saving them is a later question.
+- **Loops are saved with the patch** (Milestone 4, LV2 state). Each loop with audio is written to a WAV file beside the state, which Ingen keeps in the patch bundle (about 15 MB per 40 s loop, in every saved revision). Restoring allocates each loop with the memory it had. Loops come back **Paused**, as SooperLooper's `Looper::load_loop` leaves a loop loaded into an empty one; Trigger on all loops starts them together. Undo history is not saved, as upstream.
 
 ## Bypass
 
@@ -145,13 +145,19 @@ Settled with the user on 19 October 2026:
 - **Saving loop audio with the patch waits** for milestone 4.
 - **The Peepo page layout** is the one in [peepo-page.md](peepo-page.md), chosen by us; the user did not supply a mockup.
 
+Settled with the user on 20 October 2026 (Milestone 4):
+
+- **Saved loops come back Paused** after a reload.
+- **No separate loop outputs for now.** The mix, Dry level 0 and parallel cables cover Beebo's routings; 16 more audio ports would cost Ingen buffers on every block. Reopen if a patch needs one loop on its own effect.
+- **MIDI binding and MIDI clock wait for Peepo's MIDI.** The `commands` input can accept `midi:MidiEvent` later without new ports.
+
 ## Open questions
 
 | Question | Why it matters | When to settle |
 | --- | --- | --- |
-| Saving loops | Loops are lost on reload. LV2 state could write each loop to a WAV file beside the patch, outside `run()` | Milestone 4 |
-| Separate loop outputs | Beebo plans "individual loop in and outs"; SooperLooper has them | Milestone 4 |
-| MIDI binding and MIDI clock | Beebo binds commands to MIDI and syncs to MIDI clock; Peepo has no MIDI yet | When Peepo has MIDI |
+| Saving loops | Loops were lost on reload | Done in Milestone 4: LV2 state, a WAV file per loop ([evidence](milestone-4-validation.md)) |
+| Separate loop outputs | Beebo plans "individual loop in and outs"; SooperLooper has them | Decided 20 October 2026: not now. Reopen when a patch needs it |
+| MIDI binding and MIDI clock | Beebo binds commands to MIDI and syncs to MIDI clock; Peepo has no MIDI yet | Decided 20 October 2026: when Peepo has MIDI |
 | Telemetry load | 8 loops x 6 outputs at 25 Hz is 1,200 values a second to the interface | Measured 20 October 2026: 1,275 values/s, sent unchanged or not; raises Ingen and interface CPU and the DSP peak ([evidence](milestone-2-validation.md#on-the-pi-20-october-2026)). Peepo should subscribe only to existing loops |
 
 ## Milestones
@@ -161,4 +167,4 @@ Settled with the user on 19 October 2026:
 - [ ] Milestone 1: one stereo loop through the multi-loop layer: Record, Overdub, Rec/Dub, Mute, Undo, Redo, Clear, Trigger, press, release and long press, levels, feedback, threshold, bypass, the real-time fixes. Implemented; desktop and emulated arm64 checks pass, physical Pi and release checks remain ([evidence](milestone-1-validation.md)).
 - [ ] Milestone 2: several loops: Loops and the worker, selected loop and targets, Solo, Next and Previous, the Commands input, the per-loop outputs. Peepo's Loo-pi page, first version. Implemented; physical Pi/xrun, telemetry and release gates remain ([evidence](milestone-2-validation.md)).
 - [ ] Milestone 3: the rest of the commands (Multiply, Insert, Replace, Substitute, Reverse, Once, Pause, Delay), Quantize, sync to Tempo and to a loop, Rate, the clock outputs. The page complete, with stomp binding. Implemented in Loo-pi and in Peepo's page; Pi listening and release remain ([evidence](milestone-3-validation.md)).
-- [ ] Milestone 4: saving loops, then decide separate loop outputs and MIDI.
+- [ ] Milestone 4: saving loops, then decide separate loop outputs and MIDI. Implemented: loops saved through LV2 state and checked through Ingen's own save and reload; separate outputs and MIDI decided against for now. Pi check and release remain ([evidence](milestone-4-validation.md)).

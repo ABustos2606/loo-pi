@@ -11,6 +11,7 @@
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix rsz: <http://lv2plug.in/ns/ext/resize-port#> .
+@prefix state: <http://lv2plug.in/ns/ext/state#> .
 @prefix units: <http://lv2plug.in/ns/extensions/units#> .
 @prefix urid: <http://lv2plug.in/ns/ext/urid#> .
 @prefix work: <http://lv2plug.in/ns/ext/worker#> .
@@ -19,17 +20,17 @@
     a lv2:Plugin, lv2:DelayPlugin ;
     doap:name "Loo-pi" ;
     doap:license <https://spdx.org/licenses/GPL-2.0-or-later> ;
-    doap:description "Stereo looper for Peepo, based on SooperLooper by Jesse Chappell. Record, overdub, undo, redo, clear, mute and trigger through controls and single-loop atom commands. Additional loops, sync and rate are reserved." ;
+    doap:description "Stereo looper for Peepo, based on SooperLooper by Jesse Chappell. Up to eight stereo loops with every SooperLooper command, quantize, sync to tempo or to a loop, varispeed and clock outputs. Loops are saved with the patch." ;
     doap:homepage <https://github.com/ABustos2606/loo-pi> ;
     doap:maintainer [ a foaf:Person ; foaf:name "Alejandro Bustos" ;
         foaf:homepage <https://github.com/ABustos2606> ] ;
     doap:developer [ a foaf:Person ; foaf:name "Jesse Chappell" ;
         foaf:homepage <https://essej.net/sooperlooper/> ] ;
-    lv2:minorVersion 3 ; lv2:microVersion 0 ;
+    lv2:minorVersion 4 ; lv2:microVersion 0 ;
     lv2:requiredFeature urid:map, work:schedule ;
-    lv2:optionalFeature lv2:hardRTCapable, opts:options ;
+    lv2:optionalFeature lv2:hardRTCapable, opts:options, state:mapPath, state:makePath, state:freePath ;
     opts:supportedOption bufsz:nominalBlockLength, bufsz:maxBlockLength ;
-    lv2:extensionData work:interface ;
+    lv2:extensionData work:interface, state:interface ;
     lv2:port
     [ a lv2:InputPort, lv2:AudioPort ;
       lv2:index 0 ;

@@ -4,7 +4,7 @@ A stereo, multi-loop LV2 looper for Peepo and other LV2 hosts: up to 8 loops wit
 
 Loo-pi is made from **SooperLooper** by Jesse Chappell (https://github.com/essej/sooperlooper). It keeps SooperLooper's looping core and replaces the standalone JACK application around it with an LV2 plugin. GPL-2.0-or-later, like SooperLooper; see [COPYING](COPYING).
 
-**Status, 20 October 2026:** Milestones 2 and 3 are implemented in the plugin.
+**Status, 20 October 2026:** Milestones 2, 3 and 4 are implemented in the plugin.
 Milestone 2: up to eight stereo
 loops, worker allocation/removal, selected/all/explicit targets, Solo, Next
 and Previous, sample-timed atom commands and per-loop telemetry. Peepo has a
@@ -21,7 +21,7 @@ through its command control. The atom encoding and navigation IDs are in
 state -2. Removing loops fades their returns over 10 ms before freeing them
 on the worker. `loop_secs` affects newly allocated loops; loop 1 initially
 gets 40 s, rounded up by the core. Settings and all 145 port identities are
-preserved. Loop audio is lost when the plugin is recreated.
+preserved.
 
 Milestone 3 is implemented in the plugin: Multiply, Insert, Replace,
 Substitute, Reverse, Once, Pause and Delay; Quantize, Round and the quantized
@@ -29,6 +29,13 @@ options; Sync to Tempo or to a loop, Relative sync; Rate (0.25x to 4x,
 varispeed); and the cycle and loop clock outputs. Peepo's page has every
 command, the RATE and GLOBAL sections, and stomp binding; see
 [Milestone 3 validation](docs/milestone-3-validation.md).
+
+Milestone 4: loops are saved with the patch through LV2 state. Each loop with
+audio becomes `loopN.wav` (32-bit float stereo) in the plugin's state
+directory, which Ingen keeps inside the patch bundle; a 40 s loop is about
+15 MB. After a reload the loops are back Paused, with their cycles; Trigger
+on all loops starts them together. Separate loop outputs and MIDI were
+decided against for now; see [Milestone 4 validation](docs/milestone-4-validation.md).
 
 Bypass keeps every loop running and restores its previous mute state with a
 10 ms fade. The physical Pi xrun/telemetry gate and
@@ -61,7 +68,7 @@ installation without changing the live host. A native Pi build uses the same
 commands; `OPT="-O2 -mcpu=cortex-a76"` selects the Pi 5 CPU.
 
 Plugin URI: `https://github.com/ABustos2606/loo-pi#loopi`.
-Hosts must provide `urid:map` and `work:schedule`. The worker allocates and frees additional loops. Initial memory is
+Hosts must provide `urid:map` and `work:schedule`. Loops are saved when the host offers `state:mapPath` and `state:makePath` (lilv does). The worker allocates and frees additional loops. Initial memory is
 allocated and touched during instantiation, outside the audio thread.
 
 ## Check

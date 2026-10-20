@@ -44,6 +44,7 @@ lv2/
     commands.hpp          atom events and control edges to (target, command, press)
     tempo_sync.hpp        eighth-note pulses from BPM (from Engine::generate_sync)
     loop_memory.hpp/.cpp  worker side: allocate, touch, lock and free loop memory
+    loop_state.hpp/.cpp   LV2 state: loops to WAV files and back (4.7)
 tools/
     gen_ttl.py            writes loo-pi.ttl from one table (the per-loop ports repeat 8 times)
     render.cpp            WAV in, a command script, WAV out, for listening
@@ -137,7 +138,7 @@ All are `lv2:toggled` with `pprops:trigger`, default 0.
 | 12 | `lN_cycle` | LN Cycle | control out, s | | | CycleLength |
 | 13 | `lN_pos` | LN Position | control out, s | | | LoopPosition |
 
-145 ports in all. `tools/gen_ttl.py` writes them from one table, so the eight copies can't drift; `ttl_check` compares the result with `ports.hpp`. Enums use `lv2:integer`, `lv2:enumeration` and `lv2:scalePoint`. The class is `lv2:DelayPlugin` (LV2 has no looper class; Peepo's overlay sets the category). Loo-pi requires `urid:map` and `work:schedule`, provides the worker interface, and is `lv2:hardRTCapable`.
+145 ports in all. `tools/gen_ttl.py` writes them from one table, so the eight copies can't drift; `ttl_check` compares the result with `ports.hpp`. Enums use `lv2:integer`, `lv2:enumeration` and `lv2:scalePoint`. The class is `lv2:DelayPlugin` (LV2 has no looper class; Peepo's overlay sets the category). Loo-pi requires `urid:map` and `work:schedule`, provides the worker and state interfaces, uses `state:mapPath`, `state:makePath` and `state:freePath` when offered, and is `lv2:hardRTCapable`. Milestone 4 adds no ports; `lv2:minorVersion` is 4.
 
 The core's ports that are not exposed get the values SooperLooper's engine passes (`src/looper.cpp:200`): `ScratchPosition` 0, `TapDelayTrigger` 0, `RedoTap` 0, latencies and `SyncOffsetSamples` 0, `RoundIntegerTempo` 0, `TempoInput` = BPM. The application's pan, discrete loop ports, RubberBand and resampling are not ported.
 
@@ -199,6 +200,18 @@ values; they are never postponed by an entire host slice.
 - `instantiate` allocates loop 1 directly (it is not the audio thread), so a fresh Loo-pi plays at once. `work:schedule` is required (settled in milestone 0); hosts without a worker cannot instantiate Loo-pi. This keeps the same host contract when adding loops arrives in milestone 2.
 - A failed allocation leaves the loop at state -2; the page shows "no memory" on its card.
 
+### 4.7 Saving loops (LV2 state)
+
+Ported from `Looper::save_loop` and `Looper::load_loop` (`src/looper.cpp`); libsndfile is not built, so `loop_state.cpp` writes and reads the WAV files itself.
+
+- **What is saved.** `#loops` (`atom:Int`, the loop count) and, for each loop with a closed loop, `#loopN` (`atom:Path` to `loopN.wav`), `#loopN_cycle` (`atom:Long`, cycle frames) and `#loopN_memory` (`atom:Float`, the loop's memory in seconds). Keys are under `https://github.com/ABustos2606/loo-pi#` and are permanent. The file is 32-bit float stereo at the plugin's rate, starting at the loop's sync position, as `sl_read_current_loop_audio` reads it. A loop still recording, in Delay, or empty is not saved. Undo history is not saved (upstream saves only the current loop).
+- **Save runs while `run()` does** (LV2 state's own threading class; Ingen saves from its own thread). Each `StereoLoop` publishes its geometry (start, length and sync shift per channel, cycle, state) at the end of `process()` through a sequence lock. `capture()` reads it, copies the loop out of the core's memory, and checks that the geometry did not change meanwhile; it retries up to four times and keeps the last copy. Samples an Overdub writes during the copy may be old or new. No change in one `process()` call can overwrite the current loop's memory: a new recording starts after it in the ring.
+- **No loop is freed while it is read.** `LoopSet` shares a pointer per loop, cleared when a loop starts retiring. The save sets `saving_`, then reads the pointers; the audio thread clears a pointer, and frees the loop through the worker only when `saving_` is false (both sequentially consistent).
+- **Without `makePath` or `mapPath`** nothing is saved. Ingen's block duplicate is such a case; the copy starts with empty loops.
+- **Restore** is in the instantiation class; Ingen calls it inside `instantiate`, before the block runs. For each saved loop it allocates a new `StereoLoop` with the saved memory (or more, if the file is longer) and runs `load()`: upstream's sequence of no threshold, sync, fade or quantize; Mute, Record, the frames, then Pause, because the loop it loads into is empty. Adaptation: upstream loads every file as one cycle; Loo-pi sets the saved cycle when it divides the loop, so a multiplied loop and the loops synced to its cycle keep their timing. Missing or unreadable files leave the loop empty. Another sample rate is not converted.
+- **The Loops control arrives after the state.** Ingen restores state at instantiation and sets the saved control values later, so the first blocks may run with `loops` at its default of 1, which would retire the restored loops. `LoopSet::hold()` keeps the saved count until the `loops` input has reached it or has changed from the first value seen.
+- **A restore while the worker allocates** (a host that restores a running instance) keeps the restored loop; the late allocation is sent back to the worker to be freed.
+
 ### 4.6 Bypass
 
 `enabled` 1 to 0: every active loop gets `MUTE_ON` with a 10 ms fade; the dry signal keeps Dry level. 0 to 1: `MUTE_OFF` for the loops that were not muted before. Loops keep running in time.
@@ -209,7 +222,7 @@ values; they are never postponed by an entire host slice.
 - The core is compiled with `LOOPDEBUG` off, so its `DBG(fprintf...)` lines compile to nothing.
 - No clear over loop memory in `run()`. Clear is the core's `UNDO_ALL`, which only moves list pointers.
 - Finite check per slice on the outputs: a non-finite sample writes silence for the slice and sends `UNDO_ALL` to the loops whose output was not finite.
-- The worker and the audio thread share only the LV2 worker's message passing.
+- The worker and the audio thread share only the LV2 worker's message passing. The state save thread shares the sequence-locked geometry, the shared loop pointers and `saving_` (4.7).
 
 ## 6. Telemetry
 
@@ -257,6 +270,7 @@ Page touching and `mlock` happen in Loo-pi's worker, not in `plugin.cc`. No beha
 | `memory_full` | recording past the memory closes the loop cleanly, `free_mem` 0 |
 | `nonfinite` | a NaN input: outputs stay finite |
 | `rt_timing` | ten simulated minutes, 8 loops, random commands: worst and 99.9th-percentile `run()` time |
+| `state` | save and restore four loops (a multiplied one, a muted one, an empty one): back Paused, same lengths and cycles, same audio after Trigger; the hold until Loops arrives; missing and short files; no `makePath`; restore during a worker allocation; saves on another thread while loops are removed and re-added; WAV formats |
 
 `make test SAN=1` builds with AddressSanitizer and UBSan. The core is old C code; expect UBSan findings, and record each as fixed or accepted.
 
@@ -268,7 +282,7 @@ Page touching and `mlock` happen in Loo-pi's worker, not in `plugin.cc`. No beha
 
 ### 8.3 Ingen under WSL
 
-With Peepo's `tools/ingen-spike/env.sh`: load Loo-pi, add loops (the worker runs), send command events by setting `commands` to an `atom:Int`, record and play a test signal, check `enabled` bypass, save and reload (controls and loop count come back, loop audio doesn't), and run with one and four threads.
+With Peepo's `tools/ingen-spike/env.sh`: load Loo-pi, add loops (the worker runs), send command events by setting `commands` to an `atom:Int`, record and play a test signal, check `enabled` bypass, save and reload (controls, loop count and loop audio come back; `make test-hosts` saves with `patch:Copy` and reloads in a new engine), and run with one and four threads.
 
 ### 8.4 On the Pi
 
@@ -338,6 +352,8 @@ Implemented in Loo-pi on 20 October 2026 (items 1 to 4, plus `clocks`, `slicing`
 ### Milestone 4: decisions
 
 Saving loops through LV2 state (decided: it comes here), then the spec's remaining open questions: separate loop outputs, MIDI binding and clock. Time stretch and pitch shift are out (decided 19 October 2026). Each becomes appended ports and its own plan section.
+
+Implemented 20 October 2026: saving loops (4.7, `tests/test_state.cpp`), checked through Ingen's own save and reload with one and four threads. Decided with the user the same day: saved loops come back Paused; no separate loop outputs for now; MIDI binding and clock wait for Peepo's MIDI. No ports were added. The Pi check (save and reload a patch with four loops, xruns while saving) and the `v0.4.0` tag remain; see [milestone-4-validation.md](milestone-4-validation.md).
 
 ## 10. Risks
 

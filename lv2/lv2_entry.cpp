@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Alejandro Bustos
 #include "commands.hpp"
 #include "host_config.hpp"
+#include "loop_state.hpp"
 #include <lv2/core/lv2.h>
 #include <lv2/worker/worker.h>
 #include <algorithm>
@@ -15,6 +16,8 @@ namespace {
 struct Instance {
     std::array<void*, index(Port::count)> ports{};
     LoopSet loop;
+    StateKeys keys;
+    double rate;
     CommandControls commands;
     std::array<std::vector<float>, 4> scratch;
     uint32_t maximum, ramp_samples;
@@ -24,7 +27,7 @@ struct Instance {
     uint32_t selected_control = 0;
 
     Instance(double rate, uint32_t size, const LV2_URID_Map& map, const LV2_Worker_Schedule& schedule)
-        : loop(rate, size, schedule), maximum(size), ramp_samples(uint32_t(rate * 0.01)),
+        : loop(rate, size, schedule), keys(map), rate(rate), maximum(size), ramp_samples(uint32_t(rate * 0.01)),
           sequence_type(map.map(map.handle, LV2_ATOM__Sequence)),
           int_type(map.map(map.handle, LV2_ATOM__Int)), frame_type(map.map(map.handle, LV2_ATOM__frameTime))
     { for (auto& buffer : scratch) { buffer.resize(size); } }
@@ -170,8 +173,26 @@ LV2_Worker_Status work(LV2_Handle, LV2_Worker_Respond_Function respond, LV2_Work
 LV2_Worker_Status response(LV2_Handle handle, uint32_t size, const void* data)
 { return static_cast<Instance*>(handle)->loop.response(size, data); }
 const LV2_Worker_Interface worker{work, response, nullptr};
+// save may run while run() does (LV2 state's own threading class); restore
+// is in the instantiation class.
+LV2_State_Status save(LV2_Handle handle, LV2_State_Store_Function store, LV2_State_Handle state, uint32_t,
+                      const LV2_Feature* const* features)
+{
+    auto& self = *static_cast<Instance*>(handle);
+    return save_state(self.loop, self.keys, self.rate, store, state, features);
+}
+LV2_State_Status restore(LV2_Handle handle, LV2_State_Retrieve_Function retrieve, LV2_State_Handle state, uint32_t,
+                         const LV2_Feature* const* features)
+{
+    auto& self = *static_cast<Instance*>(handle);
+    return restore_state(self.loop, self.keys, retrieve, state, features);
+}
+const LV2_State_Interface state{save, restore};
 const void* extension_data(const char* uri)
-{ return !std::strcmp(uri, LV2_WORKER__interface) ? &worker : nullptr; }
+{
+    if (!std::strcmp(uri, LV2_WORKER__interface)) { return &worker; }
+    return !std::strcmp(uri, LV2_STATE__interface) ? &state : nullptr;
+}
 const LV2_Descriptor descriptor{kURI, instantiate, connect_port, activate, run, nullptr, cleanup, extension_data};
 }
 }

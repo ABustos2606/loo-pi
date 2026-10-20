@@ -5,6 +5,7 @@
 #include "ports.hpp"
 #include "stereo_loop.hpp"
 #include <lv2/worker/worker.h>
+#include <atomic>
 
 namespace loopi {
 // Next/Previous are Engine controls upstream, not Event::command_t entries.
@@ -40,6 +41,19 @@ public:
     static LV2_Worker_Status work(LV2_Worker_Respond_Function respond, LV2_Worker_Respond_Handle handle,
                                   uint32_t size, const void* data) noexcept;
     LV2_Worker_Status response(uint32_t size, const void* data) noexcept;
+
+    // LV2 state save, on the host's thread while run() goes on. Between
+    // begin_save() and end_save() no loop that shared() returned is freed.
+    void begin_save() noexcept { saving_.store(true); }
+    void end_save() noexcept { saving_.store(false); }
+    const StereoLoop* shared(uint32_t n) const noexcept { return shared_[n].load(); }
+    uint32_t shared_count() const noexcept { return shared_count_.load(std::memory_order_relaxed); }
+    // LV2 state restore (instantiation class). Loop n gets the frames, or is
+    // cleared when there are none. False if its memory can't be allocated.
+    bool restore(uint32_t n, const float* left, const float* right, uint64_t frames, uint64_t cycle, float seconds) noexcept;
+    // Keep `value` loops until the Loops control has reached it or changed:
+    // Ingen restores state before it sets the saved control values.
+    void hold(uint32_t value) noexcept;
 private:
     struct Slot {
         StereoLoop* loop = nullptr;
@@ -51,8 +65,10 @@ private:
         double rate;
         float seconds;
         StereoLoop* dispose;
+        bool orphan; // a late allocation for a restored slot, only freed
     };
-    struct Answer { uint32_t index; StereoLoop* loop; bool allocation; };
+    struct Answer { uint32_t index; StereoLoop* loop; bool allocation, orphan; };
+    void share(uint32_t n) noexcept;
     void service() noexcept;
     void solo(int target, bool value, bool retrigger = false) noexcept;
     void hit(uint32_t n, Command command) noexcept;
@@ -76,5 +92,13 @@ private:
     float seconds_ = 40;
     uint64_t frames_ = 0, solo_down_ = 0;
     bool solo_held_ = false;
+    // Saving: the loops the save thread may read, and the guard against
+    // freeing them (Dekker: unshare, then check saving_; seq_cst on both sides).
+    std::array<std::atomic<StereoLoop*>, kMaxLoops> shared_{};
+    std::atomic<uint32_t> shared_count_{1};
+    std::atomic<bool> saving_{false};
+    std::array<StereoLoop*, kMaxLoops> orphans_{};
+    uint32_t hold_ = 0, held_first_ = 0;
+    bool held_seen_ = false;
 };
 } // namespace loopi

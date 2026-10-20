@@ -153,6 +153,24 @@ Note for the page: with Quantize on and Sync to None, a Reverse while playing
 never commits (upstream: the core needs a tempo above 0, and the engine passes
 0 without a sync source); `lN_waiting` shows it.
 
+**Milestone 4 (Loo-pi side, 20 October 2026): saved loops.** Loops are saved
+with the patch through LV2 state, so Peepo's normal save (with plugin state)
+writes `loopN.wav` files into the block's state directory in the bundle. A
+40 s loop is about 15 MB, in every saved revision. Saving takes a moment per
+loop on the SD card; audio keeps running. After loading, every saved loop is
+Paused (`lN_state` 14) with its length and cycle. Nothing on the page has to
+change; for the page:
+
+- A paused loop already shows PAUSED. Trigger with target all (`1 * 256 +
+  15 * 2 + 1`) starts every loop together and in phase; the page could offer it
+  as PLAY ALL when the patch has just loaded with paused loops (**open**).
+- Peepo's missing-file check already follows the state's relative paths
+  (`<loop1.wav>`), so a bundle missing a loop file is reported; that loop loads
+  empty.
+- Ingen restores the state before it sets the saved `loops` value. Loo-pi holds
+  the saved number of loops until `loops` reaches it, so the page may briefly
+  see the old `loops` setting with more loops alive.
+
 ### What the page reads
 
 Telemetry, watched only while the page is open, like the Tuner's `freq_out`. N is the loop number, 1 to 8 (port list in [implementation-plan.md](implementation-plan.md#3-ports)):

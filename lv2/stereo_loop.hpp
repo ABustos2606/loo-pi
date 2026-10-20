@@ -5,6 +5,7 @@
 #include "../src/plugin.hpp"
 #include "../src/event.hpp"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -32,6 +33,7 @@ struct LoopSettings {
 class StereoLoop {
 public:
     StereoLoop(double rate, uint32_t maximum, float seconds = 40);
+    float seconds() const noexcept { return seconds_; }
     ~StereoLoop();
     StereoLoop(const StereoLoop&) = delete;
     StereoLoop& operator=(const StereoLoop&) = delete;
@@ -59,8 +61,26 @@ public:
     void recover() noexcept;
     void hit(Command command) noexcept { enqueue(command); }
     void finish_state() noexcept;
+    // LV2 state save, on the host's thread while process() runs. Copies the
+    // current loop, interleaved stereo, starting at its sync position (as
+    // sl_read_current_loop_audio). False when there is no closed loop.
+    bool capture(std::vector<float>& interleaved, uint64_t& cycle) const;
+    // LV2 state restore (instantiation class: never concurrent with process()).
+    // Looper::load_loop into an empty loop: records the frames, ends Paused.
+    void load(const float* left, const float* right, uint64_t frames, uint64_t cycle) noexcept;
 
 private:
+    // The current loop's place in each core's memory, published by process()
+    // for capture(): a sequence lock, odd while being written.
+    struct Geometry {
+        std::array<uint64_t, 2> start{}, length{}, shift{};
+        uint64_t cycle = 0;
+        int32_t state = 0;
+        bool operator==(const Geometry& o) const noexcept
+        { return start == o.start && length == o.length && shift == o.shift && cycle == o.cycle && state == o.state; }
+    };
+    void publish() noexcept;
+    bool read_geometry(Geometry& g, uint32_t& sequence) const noexcept;
     struct Request { Command command = SooperLooper::Event::UNKNOWN; bool bypass = false; };
     void enqueue(Command command, bool bypass = false) noexcept;
     bool transient() const noexcept;
@@ -87,6 +107,11 @@ private:
     std::array<Request, 16> requests_{};
     uint32_t head_ = 0, size_ = 0, maximum_, core_maximum_, ramp_samples_, fade_samples_ = 64;
     double rate_;
+    float seconds_;
+    Geometry published_{};
+    std::atomic<uint32_t> sequence_{0};
+    std::array<std::atomic<uint64_t>, 7> shared_{};
+    std::atomic<int32_t> shared_state_{0};
     // frames_ counts core frames (loop time), host_frames_ counts host frames;
     // they differ only while Rate is not 1. Press timing uses host time.
     uint64_t frames_ = 0, host_frames_ = 0, last_rec_press_ = 0;

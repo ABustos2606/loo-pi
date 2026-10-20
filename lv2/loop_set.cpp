@@ -15,38 +15,63 @@ LoopSet::LoopSet(double rate, uint32_t maximum, const LV2_Worker_Schedule& sched
     for (auto& s : scratch_) { s.resize(maximum); }
     sync_.resize(maximum);
     slots_[0].loop = new StereoLoop(rate, maximum);
+    share(0);
 }
 LoopSet::~LoopSet()
-{ for (auto& slot : slots_) { delete slot.loop; } }
+{
+    for (auto& slot : slots_) { delete slot.loop; }
+    for (auto* loop : orphans_) { delete loop; }
+}
+void LoopSet::share(uint32_t n) noexcept
+{
+    const auto& s = slots_[n];
+    shared_[n].store(n < count_ && !s.retiring ? s.loop : nullptr);
+}
 
 void LoopSet::count(uint32_t value, float seconds) noexcept
 {
     seconds_ = seconds;
+    if (hold_) {
+        if (value == hold_ || (held_seen_ && value != held_first_)) { hold_ = 0; held_seen_ = false; }
+        else {
+            if (!held_seen_) { held_seen_ = true; held_first_ = value; }
+            value = hold_;
+        }
+    }
     if (value != count_) {
         if (solo_ >= int(value)) { solo(solo_, false); }
         count_ = value;
         selected_ = std::min(selected_, count_ - 1);
         for (auto& slot : slots_) { slot.failed = false; }
+        shared_count_.store(count_, std::memory_order_relaxed);
     }
     service();
 }
 void LoopSet::service() noexcept
 {
     for (uint32_t n = 0; n < kMaxLoops; ++n) {
+        if (!orphans_[n]) { continue; }
+        Job job{n, maximum_, rate_, seconds_, orphans_[n], true};
+        if (schedule_.schedule_work(schedule_.handle, sizeof(job), &job) == LV2_WORKER_SUCCESS) { orphans_[n] = nullptr; }
+    }
+    for (uint32_t n = 0; n < kMaxLoops; ++n) {
         auto& s = slots_[n];
         if (s.pending) { continue; }
         if (n < count_) {
             if (s.loop) {
-                if (s.retiring) { s.retiring = false; s.gain.set(1, ramp_samples_); }
+                if (s.retiring) { s.retiring = false; s.gain.set(1, ramp_samples_); share(n); }
                 continue;
             }
             if (s.failed) { continue; }
         } else {
             if (!s.loop) { continue; }
-            if (!s.retiring) { s.retiring = true; s.gain.set(0, ramp_samples_); }
+            if (!s.retiring) { s.retiring = true; s.gain.set(0, ramp_samples_); share(n); }
             if (s.gain.remaining) { continue; }
+            // Unshared above; a save that read the pointer before that holds
+            // saving_, so freeing waits until it ends.
+            if (saving_.load()) { continue; }
         }
-        Job job{n, maximum_, rate_, seconds_, n < count_ ? nullptr : s.loop};
+        Job job{n, maximum_, rate_, seconds_, n < count_ ? nullptr : s.loop, false};
         // Set ownership before schedule_work: a host may execute work inline.
         auto* previous = s.loop;
         s.pending = true;
@@ -63,7 +88,7 @@ LV2_Worker_Status LoopSet::work(LV2_Worker_Respond_Function respond, LV2_Worker_
     if (size != sizeof(Job) || !data || !respond) { return LV2_WORKER_ERR_UNKNOWN; }
     Job job; std::memcpy(&job, data, sizeof(job));
     if (job.index >= kMaxLoops) { return LV2_WORKER_ERR_UNKNOWN; }
-    Answer answer{job.index, nullptr, !job.dispose};
+    Answer answer{job.index, nullptr, !job.dispose, job.orphan};
     if (job.dispose) { delete job.dispose; }
     else {
         try { answer.loop = new StereoLoop(job.rate, job.maximum, job.seconds); }
@@ -77,19 +102,70 @@ LV2_Worker_Status LoopSet::response(uint32_t size, const void* data) noexcept
 {
     if (size != sizeof(Answer) || !data) { return LV2_WORKER_ERR_UNKNOWN; }
     Answer answer; std::memcpy(&answer, data, sizeof(answer));
-    if (answer.index >= kMaxLoops || !slots_[answer.index].pending) { return LV2_WORKER_ERR_UNKNOWN; }
+    if (answer.index >= kMaxLoops) { return LV2_WORKER_ERR_UNKNOWN; }
+    if (answer.orphan) { return LV2_WORKER_SUCCESS; }
+    if (!slots_[answer.index].pending) { return LV2_WORKER_ERR_UNKNOWN; }
     auto& s = slots_[answer.index];
     s.pending = false;
+    if (s.loop) {
+        // Restored while the job was out: keep the restored loop and free the
+        // late allocation through the worker (a removal's answer has none).
+        if (answer.loop) {
+            Job job{answer.index, maximum_, rate_, seconds_, answer.loop, true};
+            if (schedule_.schedule_work(schedule_.handle, sizeof(job), &job) != LV2_WORKER_SUCCESS) {
+                orphans_[answer.index] = answer.loop;
+            }
+        }
+        return LV2_WORKER_SUCCESS;
+    }
     s.failed = answer.allocation && !answer.loop;
     s.loop = answer.loop;
     s.retiring = false;
     s.gain = Ramp{};
     pre_solo_[answer.index] = false;
     s.enabled = true;
+    share(answer.index);
     // A late allocation after removal is retained here, then retired by service.
     // No allocation, deletion, port connection or page touch on this thread.
     if (s.loop && solo_ >= 0 && answer.index != uint32_t(solo_)) { hit(answer.index, Event::MUTE_ON); }
     return LV2_WORKER_SUCCESS;
+}
+bool LoopSet::restore(uint32_t n, const float* left, const float* right, uint64_t frames, uint64_t cycle,
+                      float seconds) noexcept
+{
+    auto& s = slots_[n];
+    solo_ = -1;
+    pre_solo_ = {};
+    if (!frames) {
+        if (s.loop) { s.loop->hit(Event::UNDO_ALL); }
+        return true;
+    }
+    // Looper::load_loop needs the file to fit the free memory. A restored loop
+    // gets its saved memory, or more if the file is longer.
+    const float needed = float(double(frames) / rate_) + 1;
+    StereoLoop* loop = nullptr;
+    try { loop = new StereoLoop(rate_, maximum_, std::max(seconds, needed)); }
+    catch (...) { return false; }
+    loop->load(left, right, frames, cycle);
+    // Not the audio thread, and run() is not running: free directly. A pending
+    // slot has no loop; its late answer is handled in response().
+    delete s.loop;
+    s.loop = loop;
+    s.failed = s.retiring = false;
+    s.gain = Ramp{};
+    s.enabled = true;
+    share(n);
+    return true;
+}
+void LoopSet::hold(uint32_t value) noexcept
+{
+    value = std::clamp(value, 1U, kMaxLoops);
+    hold_ = value;
+    held_seen_ = false;
+    count_ = value;
+    selected_ = std::min(selected_, count_ - 1);
+    shared_count_.store(count_, std::memory_order_relaxed);
+    for (uint32_t n = 0; n < kMaxLoops; ++n) { share(n); }
 }
 void LoopSet::select(uint32_t value) noexcept { selected_ = std::min(value - 1, count_ - 1); }
 void LoopSet::hit(uint32_t n, Command command) noexcept

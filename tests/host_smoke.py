@@ -249,7 +249,46 @@ def main():
             wait_for(lambda: all(abs(a-b)<0.00001 for a,b in zip(observed,(0.125,-0.25))), "Ingen solo restore")
             control("loops", 1)
             wait_for(lambda: all(abs(a-b)<0.00001 for a,b in zip(observed,(0.03125,-0.0625))), "Ingen remove playing loops")
-            atom(17)
+            # Milestone 4: the loops are saved with the patch, as Peepo saves
+            # it (patch:Copy to a bundle), and come back Paused in a new engine.
+            control("loops", 2)
+            time.sleep(0.4)
+            source_level[:] = [0.0625, -0.125]
+            atom(5, target=3)
+            time.sleep(0.15)
+            atom(5, False, target=3)
+            atom(5, target=3)
+            time.sleep(0.05)
+            atom(5, False, target=3)
+            source_level[:] = [0, 0]
+            mix = (0.09375, -0.1875)
+            wait_for(lambda: all(abs(a-b)<0.00001 for a,b in zip(observed,mix)), "Ingen second loop before saving")
+            bundle = logdir / f"saved-{os.getpid()}-{threads}.ingen"
+            protocol.request("Copy", f"patch:subject <ingen:/main> ; patch:destination <{bundle.as_uri()}>")
+            state = bundle / "loopi"
+            wait_for(lambda: (state / "state.ttl").exists(), "Ingen saved no Loo-pi state")
+            require((state / "loop1.wav").exists() and (state / "loop2.wav").exists(), "Ingen saved loop files")
+            protocol.socket.close()
+            stop(engine)
+            path = Path(f"/tmp/{name}-{threads}-reload.sock")
+            paths.append(path)
+            client = f"loopi_ingen_{threads}_reload"
+            engine = launch(f"ingen-{threads}-reload", [args.ingen, "-e", "-f", "-s", name, "-n", client,
+                                                      "-S", str(path), "-E", "0", "-p", str(threads)])
+            wait_for(path.exists, "Ingen reload socket missing")
+            time.sleep(1)
+            log = (logdir / f"protocol-{threads}-reload.log").open("w")
+            logs.append(log)
+            protocol = Protocol(path, log)
+            protocol.request("Copy", f"patch:subject <{bundle.as_uri()}> ; patch:destination <ingen:/main>")
+            wait_for(lambda: bool(probe.get_ports(f"{client}:out_l")), "Ingen reloaded JACK ports missing")
+            cable(client)
+            time.sleep(0.5)
+            require(observed == [0, 0], "Ingen reloaded loops are not paused")
+            atom(15, target=1)  # Trigger, all loops.
+            atom(15, False, target=1)
+            wait_for(lambda: all(abs(a-b)<0.00001 for a,b in zip(observed,mix)), "Ingen reloaded loops play")
+            atom(17, target=1)
             wait_for(lambda: observed == [0,0], "Ingen final clear")
             source_level[:] = [0.125, -0.25]
             protocol.socket.close()

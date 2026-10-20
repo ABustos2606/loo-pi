@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <new>
+#include <thread>
 #include <sys/mman.h>
 
 extern void activateSooperLooper(LADSPA_Handle);
@@ -71,7 +72,8 @@ float Ramp::next() noexcept
 StereoLoop::StereoLoop(double rate, uint32_t maximum, float seconds)
     : maximum_(std::clamp(maximum, 1U, 8192U)),
       // Rate up to 4 runs the cores four frames per host frame.
-      core_maximum_(4 * maximum_ + 8), ramp_samples_(std::max(1U, uint32_t(rate * 0.01))), rate_(rate)
+      core_maximum_(4 * maximum_ + 8), ramp_samples_(std::max(1U, uint32_t(rate * 0.01))), rate_(rate),
+      seconds_(seconds)
 {
     for (auto& buffer : scratch_) { buffer.resize(core_maximum_); }
     emits_.resize(maximum_);
@@ -104,6 +106,7 @@ StereoLoop::StereoLoop(double rate, uint32_t maximum, float seconds)
         }
         activateSooperLooper(cores_[channel]);
     }
+    publish();
 }
 StereoLoop::~StereoLoop()
 {
@@ -495,6 +498,7 @@ void StereoLoop::process(const float* left, const float* right, float* out_l, fl
         offset += count;
         host_frames_ += count;
     }
+    publish();
 }
 
 float StereoLoop::output(OutputPort port) const noexcept
@@ -538,5 +542,132 @@ void StereoLoop::recover() noexcept
     head_ = size_ = 0;
     second_undo_ = false;
     enqueue(Event::UNDO_ALL);
+}
+
+void StereoLoop::publish() noexcept
+{
+    Geometry g;
+    for (uint32_t c = 0; c < 2; ++c) {
+        const auto* core = static_cast<const SooperLooperI*>(cores_[c]);
+        const auto* chunk = core->headLoopChunk;
+        if (!chunk || !chunk->lLoopLength) { continue; }
+        const auto length = int64_t(chunk->lLoopLength);
+        g.start[c] = chunk->lLoopStart;
+        g.length[c] = uint64_t(length);
+        // sl_read_current_loop_audio: loop offset 0 is the sync position.
+        g.shift[c] = uint64_t(((length - int64_t(chunk->lSyncPos)) % length + length) % length);
+        if (!c) { g.cycle = chunk->lCycleLength; }
+    }
+    g.state = int32_t(ports_[0][State]);
+    if (g == published_) { return; }
+    published_ = g;
+    // Sequence lock writer. Only this thread writes, so relaxed loads suffice.
+    const auto sequence = sequence_.load(std::memory_order_relaxed);
+    sequence_.store(sequence + 1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+    const std::array<uint64_t, 7> values{g.start[0], g.start[1], g.length[0], g.length[1], g.shift[0], g.shift[1], g.cycle};
+    for (uint32_t i = 0; i < values.size(); ++i) { shared_[i].store(values[i], std::memory_order_relaxed); }
+    shared_state_.store(g.state, std::memory_order_relaxed);
+    sequence_.store(sequence + 2, std::memory_order_release);
+}
+
+bool StereoLoop::read_geometry(Geometry& g, uint32_t& sequence) const noexcept
+{
+    for (uint32_t attempt = 0; attempt < 100000; ++attempt) {
+        sequence = sequence_.load(std::memory_order_acquire);
+        if (sequence & 1) { std::this_thread::yield(); continue; }
+        std::array<uint64_t, 7> v;
+        for (uint32_t i = 0; i < v.size(); ++i) { v[i] = shared_[i].load(std::memory_order_relaxed); }
+        g.state = shared_state_.load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (sequence_.load(std::memory_order_relaxed) != sequence) { continue; }
+        g.start = {v[0], v[1]}; g.length = {v[2], v[3]}; g.shift = {v[4], v[5]}; g.cycle = v[6];
+        return true;
+    }
+    return false;
+}
+
+bool StereoLoop::capture(std::vector<float>& interleaved, uint64_t& cycle) const
+{
+    // Looper::save_loop reads the loop while the engine runs. Here the audio
+    // thread may move the loop meanwhile (a command), so copy, then check the
+    // geometry is still the one copied; retry a few times, then keep the last
+    // copy. Samples an Overdub writes during the copy may be old or new.
+    for (uint32_t attempt = 0; attempt < 4; ++attempt) {
+        Geometry g;
+        uint32_t sequence;
+        if (!read_geometry(g, sequence)) { return false; }
+        switch (g.state) {
+        case LooperStatePlaying: case LooperStateOverdubbing: case LooperStateMultiplying:
+        case LooperStateInserting: case LooperStateReplacing: case LooperStateMuted: case LooperStateOneShot:
+        case LooperStateSubstitute: case LooperStatePaused: case LooperStateTriggerPlay:
+        case LooperStateUndo: case LooperStateRedo: case LooperStateRedoAll: break;
+        default: return false; // no loop, still recording, Delay or being cleared
+        }
+        const uint64_t length = g.length[0];
+        if (!length || g.length[1] != length) { return false; }
+        interleaved.resize(2 * length);
+        for (uint32_t c = 0; c < 2; ++c) {
+            const auto* core = static_cast<const SooperLooperI*>(cores_[c]);
+            const float* memory = core->pSampleBuf;
+            const auto mask = core->lBufferSizeMask;
+            for (uint64_t k = 0; k < length; ++k) {
+                interleaved[2 * k + c] = memory[(g.start[c] + (k + g.shift[c]) % length) & mask];
+            }
+        }
+        cycle = g.cycle;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (sequence_.load(std::memory_order_relaxed) == sequence) { break; }
+    }
+    return true;
+}
+
+void StereoLoop::load(const float* left, const float* right, uint64_t frames, uint64_t cycle) noexcept
+{
+    // Looper::load_loop: no threshold, sync, fade, latency or quantize while
+    // loading; mute (in case it was recording), record the frames, end the
+    // recording. The loop it loads into is empty (Off), so it ends Paused.
+    // Upstream runs the cores for zero frames to change state; so does this.
+    constexpr std::array<int, 4> kept{TriggerThreshold, Sync, FadeSamples, Quantize};
+    std::array<std::array<float, 4>, 2> old{};
+    for (uint32_t c = 0; c < 2; ++c) {
+        for (uint32_t i = 0; i < kept.size(); ++i) { old[c][i] = ports_[c][kept[i]]; ports_[c][kept[i]] = 0; }
+        ports_[c][Quantize] = float(QUANT_OFF);
+        connectPortToSooperLooper(cores_[c], AudioInputPort, scratch_[c].data());
+        connectPortToSooperLooper(cores_[c], AudioOutputPort, scratch_[2 + c].data());
+        connectPortToSooperLooper(cores_[c], SyncInputPort, scratch_[6].data());
+        connectPortToSooperLooper(cores_[c], SyncOutputPort, scratch_[4 + c].data());
+    }
+    std::fill(scratch_[6].begin(), scratch_[6].end(), 0.0f);
+    const auto step = [&](Command command) {
+        for (uint32_t c = 0; c < 2; ++c) { ports_[c][Multi] = float(command); runSooperLooper(cores_[c], 0); }
+    };
+    step(Event::MUTE_ON);
+    step(Event::RECORD);
+    for (uint64_t done = 0; done < frames;) {
+        const auto count = uint32_t(std::min<uint64_t>(frames - done, core_maximum_));
+        std::copy_n(left + done, count, scratch_[0].data());
+        std::copy_n(right + done, count, scratch_[1].data());
+        for (auto core : cores_) { runSooperLooper(core, count); }
+        done += count;
+    }
+    if (!frames) { step(Event::UNDO_ALL); }
+    else { step(Event::UNKNOWN); step(Event::PAUSE_ON); }
+    for (uint32_t c = 0; c < 2; ++c) {
+        for (uint32_t i = 0; i < kept.size(); ++i) { ports_[c][kept[i]] = old[c][i]; }
+        ports_[c][Multi] = -1;
+        // Adaptation: upstream loads every file as one cycle. Keep the saved
+        // cycle when it divides the loop, so Multiply's cycles and the loops
+        // synced to them survive a reload.
+        auto* chunk = static_cast<SooperLooperI*>(cores_[c])->headLoopChunk;
+        if (chunk && cycle && cycle < chunk->lLoopLength && chunk->lLoopLength % cycle == 0) {
+            chunk->lCycleLength = cycle;
+            chunk->lCycles = chunk->lLoopLength / cycle;
+        }
+    }
+    head_ = size_ = 0;
+    second_undo_ = false;
+    track_valid_ = false;
+    publish();
 }
 } // namespace loopi
