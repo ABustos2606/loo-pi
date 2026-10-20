@@ -11,7 +11,9 @@ using namespace SooperLooper;
 LoopSet::LoopSet(double rate, uint32_t maximum, const LV2_Worker_Schedule& schedule)
     : schedule_(schedule), rate_(rate), maximum_(maximum), ramp_samples_(std::max(1U, uint32_t(rate * .01)))
 {
+    pulse_samples_ = std::max(1U, uint32_t(std::lround(rate * .001))); // 1 ms clock trigger
     for (auto& s : scratch_) { s.resize(maximum); }
+    sync_.resize(maximum);
     slots_[0].loop = new StereoLoop(rate, maximum);
 }
 LoopSet::~LoopSet()
@@ -151,21 +153,120 @@ void LoopSet::event(uint32_t target, uint32_t command, bool press) noexcept
         if ((target == 1 || int(n) == chosen) && slots_[n].loop) { slots_[n].loop->event(cmd, press); }
     }
 }
+void LoopSet::global(const GlobalSettings& settings) noexcept
+{
+    global_ = settings;
+    // Engine::set_tempo restarts the eighth-note counters on a tempo change.
+    if (settings.bpm != counted_bpm_) { tempo_counter_ = quarter_counter_ = 0; counted_bpm_ = settings.bpm; }
+}
+void LoopSet::activate() noexcept
+{
+    tempo_counter_ = quarter_counter_ = 0;
+    cycle_left_ = loop_left_ = 0;
+}
+int LoopSet::sync_loop() const noexcept
+{
+    // Engine::process runs the sync source loop first, when it exists.
+    if (global_.sync_to < 2) { return -1; }
+    const uint32_t n = global_.sync_to - 2;
+    return n < count_ && slots_[n].loop && !slots_[n].retiring ? int(n) : -1;
+}
 void LoopSet::configure(uint32_t n, const LoopSettings& settings, bool enabled) noexcept
 {
     auto& s = slots_[n];
     if (!s.loop) { return; }
-    s.loop->configure(settings); s.loop->enabled(enabled);
+    LoopSettings value = settings;
+    value.quantize = global_.quantize;
+    value.round = global_.round;
+    value.mute_quantized = global_.mute_quantized;
+    value.overdub_quantized = global_.overdub_quantized;
+    value.replace_quantized = global_.replace_quantized;
+    value.eighths = global_.eighths;
+    // Engine::update_sync_source / calculate_tempo_frames: no tempo without a
+    // sync source. Looper::run: the sync source loop itself runs free, and
+    // Relative sync makes the core's Sync 2.
+    value.tempo = global_.sync_to == 0 || global_.bpm <= 1 ? 0 : global_.bpm;
+    const int source = sync_loop();
+    // Adaptation: upstream gives an absent source an all-zero sync buffer, so
+    // a synced loop would wait forever to record. Loo-pi runs it free.
+    const bool has_source = global_.sync_to == 1 || source >= 0;
+    if (!has_source || int(n) == source || settings.sync < .5f) { value.sync = 0; }
+    else { value.sync = global_.relative_sync ? 2 : 1; }
+    s.loop->configure(value); s.loop->enabled(enabled);
     if (enabled && !s.enabled && solo_ >= 0 && int(n) != solo_) { hit(n, Event::MUTE_ON); }
     s.enabled = enabled;
 }
-bool LoopSet::process(const float* l, const float* r, float* out_l, float* out_r, uint32_t frames) noexcept
+void LoopSet::generate_sync(uint32_t frames) noexcept
+{
+    // Engine::calculate_tempo_frames and Engine::generate_sync, internal tempo:
+    // a 2.0 every eighth (Quantize 8th) or every cycle (Quantize Cycle); other
+    // quantize modes have no tempo frames and get 1.0 everywhere.
+    const double tempo = global_.bpm;
+    double tempo_frames = 0, quarter_frames = 0;
+    if (tempo > 0.0) {
+        if (global_.quantize == QUANT_8TH) { tempo_frames = rate_ * (1.0 / tempo) * 30.0; }
+        else if (global_.quantize == QUANT_CYCLE) { tempo_frames = rate_ * (1.0 / tempo) * 30.0 * global_.eighths; }
+        quarter_frames = rate_ * (1.0 / tempo) * 60;
+    }
+    float* buffer = sync_.data();
+    if (tempo_frames == 0.0) {
+        double qcurr = quarter_counter_ + double(frames);
+        if (qcurr >= quarter_frames) { qcurr = ((qcurr - quarter_frames) - std::trunc(qcurr - quarter_frames)) + 1.0; }
+        quarter_counter_ = qcurr;
+        std::fill_n(buffer, frames, 1.0f);
+        return;
+    }
+    double curr = tempo_counter_, qcurr = quarter_counter_;
+    uint32_t npos = 0;
+    while (npos < frames) {
+        while (curr < tempo_frames && qcurr < quarter_frames && npos < frames) {
+            buffer[npos++] = 0.0f;
+            curr += 1.0;
+            qcurr += 1.0;
+        }
+        if (qcurr >= quarter_frames) { qcurr = ((qcurr - quarter_frames) - std::trunc(qcurr - quarter_frames)) + 1.0; }
+        if (curr >= tempo_frames && npos < frames) {
+            buffer[npos++] = 2.0f;
+            curr = ((curr - tempo_frames) - std::trunc(curr - tempo_frames)) + 1.0;
+        }
+    }
+    tempo_counter_ = curr;
+    quarter_counter_ = qcurr;
+}
+
+void LoopSet::clocks(float* cycle_clock, float* loop_clock, uint32_t frames) noexcept
+{
+    // Continue pulses begun in an earlier slice.
+    for (uint32_t i = 0; i < frames; ++i) {
+        if (cycle_clock) { cycle_clock[i] = cycle_left_ ? 1.0f : 0.0f; }
+        if (loop_clock) { loop_clock[i] = loop_left_ ? 1.0f : 0.0f; }
+        if (cycle_left_) { --cycle_left_; }
+        if (loop_left_) { --loop_left_; }
+    }
+    // The sync loop, or the selected loop when syncing to Tempo or None. The
+    // loop reports the host frames that played a cycle or loop start.
+    const int source = sync_loop();
+    const StereoLoop* loop = slots_[source >= 0 ? uint32_t(source) : selected_].loop;
+    if (!loop) { return; }
+    const auto pulse = [&](float* out, uint32_t& left, uint32_t from) {
+        const uint32_t end = std::min(frames, from + pulse_samples_);
+        if (out) { std::fill(out + from, out + end, 1.0f); }
+        left = from + pulse_samples_ - end;
+    };
+    const uint32_t* at = nullptr;
+    for (uint32_t i = 0, n = loop->starts(false, at); i < n; ++i) { pulse(cycle_clock, cycle_left_, at[i]); }
+    for (uint32_t i = 0, n = loop->starts(true, at); i < n; ++i) { pulse(loop_clock, loop_left_, at[i]); }
+}
+
+bool LoopSet::process(const float* l, const float* r, float* out_l, float* out_r, uint32_t frames,
+                      float* cycle_clock, float* loop_clock) noexcept
 {
     bool nonfinite = false;
     std::fill_n(out_l, frames, 0); std::fill_n(out_r, frames, 0);
-    for (auto& s : slots_) {
-        if (!s.loop) { continue; }
-        s.loop->process(l, r, scratch_[0].data(), scratch_[1].data(), frames);
+    const float* sync = nullptr;
+    if (global_.sync_to == 1) { generate_sync(frames); sync = sync_.data(); }
+    const auto run = [&](Slot& s, const float* sync_in, float* sync_out) {
+        s.loop->process(l, r, scratch_[0].data(), scratch_[1].data(), frames, sync_in, sync_out);
         bool bad = false;
         for (uint32_t i = 0; i < frames; ++i) { bad |= !std::isfinite(scratch_[0][i]) || !std::isfinite(scratch_[1][i]); }
         if (bad) { s.loop->recover(); }
@@ -174,7 +275,15 @@ bool LoopSet::process(const float* l, const float* r, float* out_l, float* out_r
             const auto gain = s.gain.next();
             if (!bad) { out_l[i] += scratch_[0][i] * gain; out_r[i] += scratch_[1][i] * gain; }
         }
+    };
+    // Engine::process: the sync source loop runs first; its channel 0 sync
+    // output is every other loop's sync input.
+    const int source = sync_loop();
+    if (source >= 0) { run(slots_[source], nullptr, sync_.data()); sync = sync_.data(); }
+    for (uint32_t n = 0; n < kMaxLoops; ++n) {
+        if (int(n) != source && slots_[n].loop) { run(slots_[n], sync, nullptr); }
     }
+    clocks(cycle_clock, loop_clock, frames);
     frames_ += frames;
     service();
     return nonfinite;

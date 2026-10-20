@@ -61,25 +61,32 @@ $(BUILD_DIR)/test_core: tests/test_core.cpp tests/rt_guard.cpp tests/rt_guard.hp
 	$(CXX) $(COMPILE_FLAGS) tests/test_core.cpp tests/rt_guard.cpp $(BUILD_DIR)/obj/stereo_loop.o $(BUILD_DIR)/obj/plugin.o \
 		$(LDFLAGS) $(SAN_FLAGS) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free -o $@
 
-$(BUILD_DIR)/test_multiloop: tests/test_multiloop.cpp tests/host.hpp tests/rt_guard.cpp tests/rt_guard.hpp $(OBJECTS)
+$(BUILD_DIR)/test_multiloop: tests/test_multiloop.cpp tests/fixture.hpp tests/host.hpp tests/rt_guard.cpp tests/rt_guard.hpp $(OBJECTS)
 	@mkdir -p "$(@D)"
 	$(CXX) $(COMPILE_FLAGS) tests/test_multiloop.cpp tests/rt_guard.cpp $(OBJECTS) $(LDFLAGS) $(SAN_FLAGS) \
+		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free -o $@
+
+$(BUILD_DIR)/test_m3: tests/test_m3.cpp tests/fixture.hpp tests/host.hpp tests/rt_guard.cpp tests/rt_guard.hpp $(OBJECTS)
+	@mkdir -p "$(@D)"
+	$(CXX) $(COMPILE_FLAGS) tests/test_m3.cpp tests/rt_guard.cpp $(OBJECTS) $(LDFLAGS) $(SAN_FLAGS) \
 		-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free -o $@
 
 test-core: $(BUILD_DIR)/test_core
 	$(TEST_ENV) $(BUILD_DIR)/test_core
 
-test-timing: $(BUILD_DIR)/test_core $(BUILD_DIR)/test_multiloop
+test-timing: $(BUILD_DIR)/test_core $(BUILD_DIR)/test_multiloop $(BUILD_DIR)/test_m3
 	$(TEST_ENV) $(BUILD_DIR)/test_core --timing
 	$(TEST_ENV) $(BUILD_DIR)/test_multiloop --timing
+	$(TEST_ENV) $(BUILD_DIR)/test_m3 --timing
 
-test: all $(BUILD_DIR)/test_scaffold $(BUILD_DIR)/test_core $(BUILD_DIR)/test_plugin $(BUILD_DIR)/test_multiloop
+test: all $(BUILD_DIR)/test_scaffold $(BUILD_DIR)/test_core $(BUILD_DIR)/test_plugin $(BUILD_DIR)/test_multiloop $(BUILD_DIR)/test_m3
 	$(PYTHON) tools/gen_ttl.py --check
 	$(PYTHON) tests/ttl_check.py $(BUNDLE)
 	$(TEST_ENV) $(BUILD_DIR)/test_scaffold $(BUNDLE)/loo-pi.so
 	$(TEST_ENV) $(BUILD_DIR)/test_core
 	$(TEST_ENV) $(BUILD_DIR)/test_plugin $(BUNDLE)/loo-pi.so
 	$(TEST_ENV) $(BUILD_DIR)/test_multiloop
+	$(TEST_ENV) $(BUILD_DIR)/test_m3
 
 test-hosts: all
 	$(PYTHON) tests/host_smoke.py $(BUNDLE) $(HOST_ARGS)
@@ -97,6 +104,6 @@ install: all
 	install -m 644 $(TTL_TARGETS) COPYING "$(DESTDIR)$(LV2DIR)/loo-pi.lv2/"
 
 clean:
-	$(RM) $(OBJECTS) $(OBJECTS:.o=.d) $(BUNDLE)/loo-pi.so $(TTL_TARGETS) $(BUILD_DIR)/test_scaffold $(BUILD_DIR)/test_core $(BUILD_DIR)/test_plugin $(BUILD_DIR)/test_multiloop
+	$(RM) $(OBJECTS) $(OBJECTS:.o=.d) $(BUNDLE)/loo-pi.so $(TTL_TARGETS) $(BUILD_DIR)/test_scaffold $(BUILD_DIR)/test_core $(BUILD_DIR)/test_plugin $(BUILD_DIR)/test_multiloop $(BUILD_DIR)/test_m3
 
 -include $(OBJECTS:.o=.d)

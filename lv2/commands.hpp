@@ -57,10 +57,11 @@ class CommandControls {
 public:
     void update(const std::array<void*, index(Port::count)>& ports, LoopSet& loop) noexcept
     {
-        constexpr std::array<Port, 6> inputs{Port::rec_dub, Port::overdub, Port::undo, Port::mute, Port::trigger, Port::next_loop};
-        constexpr std::array<uint32_t, 6> commands{SooperLooper::Event::RECORD_OR_OVERDUB,
+        constexpr std::array<Port, 7> inputs{Port::rec_dub, Port::overdub, Port::undo, Port::mute, Port::trigger,
+            Port::pause, Port::next_loop};
+        constexpr std::array<uint32_t, 7> commands{SooperLooper::Event::RECORD_OR_OVERDUB,
             SooperLooper::Event::OVERDUB, SooperLooper::Event::UNDO,
-            SooperLooper::Event::MUTE, SooperLooper::Event::TRIGGER, kNextLoop};
+            SooperLooper::Event::MUTE, SooperLooper::Event::TRIGGER, SooperLooper::Event::PAUSE, kNextLoop};
         for (uint32_t i = 0; i < inputs.size(); ++i) {
             const auto* input = static_cast<const float*>(ports[index(inputs[i])]);
             const bool down = input && std::isfinite(*input) && *input >= 0.5f;
@@ -68,6 +69,6 @@ public:
         }
     }
 private:
-    std::array<bool, 6> previous_{};
+    std::array<bool, 7> previous_{};
 };
 } // namespace loopi

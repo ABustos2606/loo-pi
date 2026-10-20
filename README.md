@@ -4,7 +4,8 @@ A stereo, multi-loop LV2 looper for Peepo and other LV2 hosts: up to 8 loops wit
 
 Loo-pi is made from **SooperLooper** by Jesse Chappell (https://github.com/essej/sooperlooper). It keeps SooperLooper's looping core and replaces the standalone JACK application around it with an LV2 plugin. GPL-2.0-or-later, like SooperLooper; see [COPYING](COPYING).
 
-**Status, 20 October 2026:** Milestone 2 is implemented: up to eight stereo
+**Status, 20 October 2026:** Milestones 2 and 3 are implemented in the plugin.
+Milestone 2: up to eight stereo
 loops, worker allocation/removal, selected/all/explicit targets, Solo, Next
 and Previous, sample-timed atom commands and per-loop telemetry. Peepo has a
 first Loo-pi page with loop cards, quick commands, COMMANDS and LEVELS.
@@ -22,9 +23,15 @@ on the worker. `loop_secs` affects newly allocated loops; loop 1 initially
 gets 40 s, rounded up by the core. Settings and all 145 port identities are
 preserved. Loop audio is lost when the plugin is recreated.
 
-Pause, sync, quantize, varispeed and clocks await Milestone 3; the page shows
-future commands disabled. Bypass keeps every loop running and restores its
-previous mute state with a 10 ms fade. The physical Pi xrun/telemetry gate and
+Milestone 3 is implemented in the plugin: Multiply, Insert, Replace,
+Substitute, Reverse, Once, Pause and Delay; Quantize, Round and the quantized
+options; Sync to Tempo or to a loop, Relative sync; Rate (0.25x to 4x,
+varispeed); and the cycle and loop clock outputs. Peepo's page has every
+command, the RATE and GLOBAL sections, and stomp binding; see
+[Milestone 3 validation](docs/milestone-3-validation.md).
+
+Bypass keeps every loop running and restores its previous mute state with a
+10 ms fade. The physical Pi xrun/telemetry gate and
 release tag remain pending; see [Milestone 2 validation](docs/milestone-2-validation.md).
 
 The upstream application's README is [README.sooperlooper.md](README.sooperlooper.md).
@@ -62,7 +69,7 @@ allocated and touched during instantiation, outside the audio thread.
 ```sh
 make test                         # also needs python3 and python3-rdflib
 make test SAN=1                   # AddressSanitizer and UBSan, separate build
-make test-timing                  # ten simulated minutes each, one and eight stereo loops
+make test-timing                  # ten simulated minutes each: one loop, eight loops, eight with sync and Rate
 make lint                        # also needs lv2lint on PATH
 make test-hosts                   # jalv, jackd, Ingen, python3-jack-client, numpy
 ```

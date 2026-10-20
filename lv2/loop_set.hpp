@@ -11,6 +11,14 @@ namespace loopi {
 // Reserve explicit wire IDs outside the upstream enum; never cast these to it.
 inline constexpr uint32_t kNextLoop = 64, kPreviousLoop = 65;
 
+// Settings Engine holds for every loop.
+struct GlobalSettings {
+    float quantize = 0, eighths = 16, bpm = 120;
+    uint32_t sync_to = 0; // 0 None, 1 Tempo, 2 + N for loop N + 1
+    bool round = false, mute_quantized = false, overdub_quantized = false, replace_quantized = false,
+         relative_sync = false;
+};
+
 class LoopSet {
 public:
     LoopSet(double rate, uint32_t maximum, const LV2_Worker_Schedule& schedule);
@@ -18,8 +26,14 @@ public:
     void count(uint32_t value, float seconds) noexcept;
     void select(uint32_t value) noexcept;
     void event(uint32_t target, uint32_t command, bool press) noexcept;
+    void global(const GlobalSettings& settings) noexcept;
+    // settings.sync is the loop's own Sync switch (0 or 1); the core's sync
+    // mode also depends on the sync source (see configure()).
     void configure(uint32_t n, const LoopSettings& settings, bool enabled) noexcept;
-    bool process(const float* l, const float* r, float* out_l, float* out_r, uint32_t frames) noexcept;
+    void activate() noexcept;
+    // Nullable clock outputs receive the cycle and loop triggers.
+    bool process(const float* l, const float* r, float* out_l, float* out_r, uint32_t frames,
+                 float* cycle_clock = nullptr, float* loop_clock = nullptr) noexcept;
     float output(uint32_t n, SooperLooper::OutputPort port) const noexcept;
     uint32_t selected() const noexcept { return selected_ + 1; }
     uint32_t soloed() const noexcept { return solo_ < 0 ? 0 : uint32_t(solo_ + 1); }
@@ -42,9 +56,19 @@ private:
     void service() noexcept;
     void solo(int target, bool value, bool retrigger = false) noexcept;
     void hit(uint32_t n, Command command) noexcept;
+    int sync_loop() const noexcept;
+    void generate_sync(uint32_t frames) noexcept;
+    void clocks(float* cycle_clock, float* loop_clock, uint32_t frames) noexcept;
     std::array<Slot, kMaxLoops> slots_{};
     std::array<bool, kMaxLoops> pre_solo_{};
     std::array<std::vector<float>, 2> scratch_;
+    std::vector<float> sync_;
+    GlobalSettings global_{};
+    // Engine::generate_sync state; Engine::set_tempo resets it.
+    double tempo_counter_ = 0, quarter_counter_ = 0;
+    float counted_bpm_ = 0;
+    // Clock outputs: samples left of the current pulses.
+    uint32_t cycle_left_ = 0, loop_left_ = 0, pulse_samples_ = 48;
     LV2_Worker_Schedule schedule_;
     double rate_;
     uint32_t maximum_, ramp_samples_, count_ = 1, selected_ = 0;

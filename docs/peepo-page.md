@@ -100,16 +100,58 @@ Targets for absent loops are ignored, including navigation with an invalid targe
 changed selection into the `selected` setting so it is saved, and a later tap
 on the old setting value still reaches the plugin. Touch commands pin the
 selected target until release, including release after a lost press or leaving
-the page. Telemetry updates widgets without rebuilding them. Ingen broadcasts
-changes only, so stable states do not expire; subscriptions clear on leaving
-the page or disconnecting. Transient atom input values never dirty the graph.
+the page. Telemetry updates widgets without rebuilding them; subscriptions
+clear on leaving the page or disconnecting. Transient atom input values never
+dirty the graph.
 
-The first page version includes COMMANDS, LEVELS, the loop row, quick commands,
-add/remove and Next/Previous. Future commands and Sync switches are disabled.
-Dry level, Fade, Safety feedback and Loop memory are temporarily in the
-scrolling LEVELS section until GLOBAL arrives in Milestone 3. The two section
-pills fit in the header; RATE/GLOBAL and stomp binding remain Milestone 3.
-The existing momentary command-control stomp assignments remain usable.
+**Measured on the Pi (20 October 2026):** Ingen sends every subscribed output
+25 times a second whether or not it changed: 51 outputs, 1,275 values and
+203 KiB a second, also for loops that are not active. With the page open,
+Ingen's CPU rose from 6.4 % to 15.5 % of a core, the interface's from 0.4 % to
+18.4 %, and the DSP peak from 5 % to 29 %
+([milestone-2-validation.md](milestone-2-validation.md#on-the-pi-20-october-2026)).
+Since Milestone 3 the page subscribes only to the loops that exist (27 outputs
+with 4 loops). Adding a loop subscribes its outputs and keeps the values
+already known.
+
+**Milestone 3 (Loo-pi side, 20 October 2026).** The `commands` input accepts
+every `Event::command_t` number except Scratch (4) and the mute-mode toggles
+Redo toggle, Quantize toggle and Round toggle (11 to 13), which are ignored.
+Multiply, Insert, Replace, Substitute, Reverse, Once, Pause and Delay work, as
+do Mute on/off, Pause on/off, Mute trigger, Set and Reset sync position. The
+`pause` control is live. Quantize, Round, the quantized options, Sync to,
+Relative sync, 8ths/cycle, BPM, each loop's Sync, Play sync and Rate are live,
+and so are the clock outputs. `lN_waiting` is 1 while a quantized or synced
+command waits; `lN_next` is the state it will enter.
+
+**Milestone 3 (Peepo side, 20 October 2026).**
+- **Commands:** every command button is enabled. `looper_command_supported`
+  (`src/core/looper.hpp`) matches the list above.
+- **Header:** four section pills (Commands, Levels, Rate, Global) plus ON and
+  ACTIONS.
+- **LEVELS:** has live Sync and Play sync switches.
+- **RATE:** Rate and a Reverse button, both for the selected loop.
+- **GLOBAL:** Dry level, Quantize, Round, the three quantized options, Sync to,
+  Relative sync, 8ths/cycle, Fade, Safe feedback, Loop memory, Previous loop,
+  Next loop and Remove loop.
+- **Footer:** shows the sync source (FREE, SYNC TEMPO or SYNC LOOP n). A new
+  message stays for 4 s before the status line replaces it.
+- **Binding:** BIND, then Act on, then a command, then a stomp. The stomp
+  doesn't play while binding, and pressing it again on the same command and
+  target unbinds it.
+- **Stomp badges:** a bound command shows its stomp numbers in a white dot, for
+  the current Act on, and the stomp also shows on the module's square on the
+  patch.
+- **Stomp press and release:** a bound stomp sends the press when it goes down
+  and the release when it comes up. A SELECTED target is fixed at the press
+  while the page is open; otherwise Loo-pi's own selection (target 0) is used.
+
+Not done yet: a waiting command's button doesn't blink (the loop card does), the
+default stomp bindings aren't offered, and item 6 below is still open.
+
+Note for the page: with Quantize on and Sync to None, a Reverse while playing
+never commits (upstream: the core needs a tempo above 0, and the engine passes
+0 without a sync source); `lN_waiting` shows it.
 
 ### What the page reads
 
@@ -132,7 +174,7 @@ Settings are read from the graph, as for any module.
 1. A Loo-pi page in `src/ui/application.cpp` (or its own file), chosen by the plugin URI, as the Euclidean page is (`src/core/euclidean.hpp`).
 2. `watch_looper` / `looper_status` in the engine interface and the Ingen session, following `watch_euclidean`.
 3. Sending `atom:Int` values to an atom input port through the Ingen adapter.
-4. Stomp bindings to Loo-pi commands, stored per patch next to the existing assignments (for example `peepo:control-stomp1 "looper|m4|<uri>|<command>|<target>"`), and sent as press and release.
+4. Stomp bindings to Loo-pi commands, stored per patch next to the existing assignments in the same eight fields: `peepo:control-stomp1 "looper|m4|<uri>|<command>|<target>|<target>|0|momentary"`. `ControlAction::Looper` in Peepo's model keeps the command in the parameter field and the target in both range ends. Sent as press and release. Done in Milestone 3.
 5. The overlay entry: name, category, `"bypass": "port"`, `"tempo": "bpm"`, and hiding the generic page's controls the Loo-pi page replaces.
 6. The canvas square could show the selected loop's state colour, so the patch shows the looper at a glance (**open**).
 7. Tests: LVGL captures at 800 x 480 of empty, recording, several loops playing, muted, waiting; adapter tests for the telemetry and the command events; a live WSL check with the real plugin.

@@ -155,6 +155,8 @@ Ported from `Looper` (`src/looper.cpp`):
 - **Input gain**, smoothed per sample, before the cores (`Looper::run_loops`).
 - Gains and Feedback use fixed 10 ms linear ramps. Feedback ramps in steps of 32 samples counted from the plugin's start, and while it ramps the core runs in chunks that never cross a step, so each chunk sees constant feedback (an LFO on Feedback then costs about the same as a steady value). History fades run the core one sample at a time; this makes output bit-identical under Ingen's variable slicing without rewriting the core's block-dependent ramps/commit points. Loop level is applied to the loop return; Dry level to the unscaled dry input.
 - Each control is written to both cores' port arrays; Multi is set for one slice per command and back to -1, as the engine does.
+- **Rate** (`Looper::run_loops`, resampled branch): upstream resamples input, sync and output with libsamplerate's `SRC_LINEAR`, which Loo-pi does not build. Loo-pi interpolates linearly itself: the input into loop time at Rate, the output back at 1/Rate, reading about three loop-time frames behind the newest so both neighbours exist. A sync value moves whole to the next loop-time frame instead of being interpolated, so no pulse is lost or split. Rate exactly 1 uses the direct path, unchanged from Milestone 1. Press timing (long press, double tap) counts host frames. Scratch buffers are sized for Rate 4 when the loop is allocated.
+- **Quantized Reverse** commits the core's rate on the boundary sample, but the core keeps stepping with its local copy until the run ends, so the direction would flip wherever the host ended the run. While a quantized Reverse is pending the cores run one frame at a time, as during history fades, so the flip always lands on the frame after the boundary.
 - A loop with no memory yet reports state -2, passes nothing and ignores commands.
 
 ### 4.2 The loop set (`loop_set`)
@@ -168,10 +170,11 @@ Ported from `Engine` (`src/engine.cpp`):
 
 ### 4.3 Sync
 
-- **Tempo** (`tempo_sync.hpp`, from `Engine::generate_sync` and `calculate_tempo_frames`): a counter of `samplerate * 30 / bpm` frames (one eighth note) writes a pulse into a per-block buffer allocated in `instantiate`. A BPM change takes effect at the next wrap. The counter restarts on `activate`.
-- **Loop N:** loop N runs first in every slice; its channel 0 sync output is the sync buffer for every other loop, as in `Engine::process`.
-- **None:** an all-zero sync buffer.
-- **Clock outputs:** from the sync loop's position crossing a multiple of its cycle (cycle clock) and wrapping to 0 (loop clock). With Sync to Tempo or None, the selected loop is used.
+- **Tempo** (in `loop_set`, from `Engine::generate_sync` and `calculate_tempo_frames`): a counter writes 2.0 into a per-slice buffer allocated in `instantiate`, every `samplerate * 30 / bpm` frames with Quantize 8th or that times 8ths/cycle with Quantize Cycle; with Quantize Off or Loop the buffer is 1.0 everywhere, as upstream. A BPM change restarts the counter (`Engine::set_tempo`; this replaces the earlier "at the next wrap"). The counter also restarts on `activate`. Upstream writes a pulse due on the sample after the block past the buffer's end and so loses it; Loo-pi writes it on the next slice's first sample.
+- **Loop N:** loop N runs first in every slice; its channel 0 sync output is the sync buffer for every other loop, as in `Engine::process`. Loop N itself runs with Sync 0 (`Looper::run`).
+- **None:** no sync source. Adaptation: upstream gives a loop with Sync on an all-zero buffer, so its recording would wait forever; Loo-pi runs such a loop free. The same applies when Sync to names a loop that does not exist. TempoInput is 0 with None, as upstream.
+- **Relative sync** makes the core's Sync 2 for synced loops; channel 1 follows with 2 (`Looper::run`, `_slave_sync_port`).
+- **Clock outputs:** a 1 ms trigger (1.0) on the host frame that plays the first frame of each cycle (cycle clock) and of the loop (loop clock) of the sync loop, or of the selected loop with Sync to Tempo or None. Closing a recording into Play starts both. `stereo_loop` tracks them per core run: the core moves its position by exactly one frame per frame, so the frame that played each boundary follows from the positions before and after the run, including one change of direction; the frames map back to host frames through the resampler. Bit-identical under any host slicing.
 
 ### 4.4 Commands (`commands.hpp`)
 
@@ -212,6 +215,8 @@ values; they are never postponed by an entire host slice.
 
 The per-loop outputs are written once per slice from channel 0's core outputs. Peepo watches them only while its page is open. 8 loops x 6 outputs at 25 Hz is 1,200 values a second; measure it on the Pi in milestone 2. If it is too much, Peepo watches `lN_pos` only for the loops on screen, or Loo-pi adds an atom output that sends one compact message per loop when something changes (appended port).
 
+Measured on the Pi on 20 October 2026: Ingen sends all 51 subscribed outputs at 25 Hz whether they change or not (1,275 values, 203 KiB a second). With the page open Ingen's CPU went from 6.4 % to 15.5 % of a core, the interface's from 0.4 % to 18.4 %, the DSP peak from 5 % to 29 %, and xruns appeared to rise. First step: Peepo subscribes only to the existing loops (27 outputs with 4). See [milestone-2-validation.md](milestone-2-validation.md#on-the-pi-20-october-2026).
+
 ## 7. Changes to upstream files
 
 Each change is marked `// Loo-pi:` in the source.
@@ -219,6 +224,7 @@ Each change is marked `// Loo-pi:` in the source.
 1. `plugin.cc`: drop `getenv("SL_SAMPLE_TIME")`; take the length as an explicit argument to `sl_instantiate(sample_rate, sample_seconds)`. The retained LADSPA entry point calls it with `SAMPLE_MEMORY`. Implemented in milestone 0: a shared setter would race when two instances or workers allocate at once.
 2. `plugin.cc`: remove `#include <iostream>` and guard `cerr` uses behind `LOOPDEBUG` if any remain outside `DBG`.
 3. Anything needed so `plugin.cc` compiles without the rest of the application (`event.hpp` and `utils.hpp` include only standard headers; checked at milestone 0). Include `<algorithm>` explicitly. Milestone 0 also fixes missing input-buffer failure handling, partial-allocation instance cleanup and the input-buffer leak during normal cleanup; looping behaviour is unchanged.
+4. `plugin.cc` (Milestone 3, a core bug): `fillLoops` stops descending at a chunk that is its own source. `beginOverdub`'s "overdub using self" creates such a chunk when a loop fills its memory, and the walk never ended (an Overdub after a memory-full Multiply froze the audio thread). See [milestone-3-validation.md](milestone-3-validation.md#core-fix-endless-loop-after-a-memory-full-multiply).
 
 Page touching and `mlock` happen in Loo-pi's worker, not in `plugin.cc`. No behaviour change to the looping itself. A bug found in the core is fixed in a separate commit, so it can be offered upstream.
 
@@ -326,6 +332,8 @@ Peepo's pinned release build remain outstanding; see
 4. Tests: `sync_loop`, `tempo`, `quantize`, `commands_m3`, `rate`.
 5. In Peepo: RATE and GLOBAL sections, stomp binding with targets, stomp badges.
 - **Done when:** the tests pass, plus a listening session on the Pi playing EDP-style (multiply and insert against a synced loop). Tag `v0.3.0`.
+
+Implemented in Loo-pi on 20 October 2026 (items 1 to 4, plus `clocks`, `slicing` and an eight-loop timing run in `tests/test_m3.cpp`). The Peepo items (5) were done the same day: RATE and GLOBAL sections, stomp binding with targets, stomp badges. Pi listening and the release tag remain; see [milestone-3-validation.md](milestone-3-validation.md).
 
 ### Milestone 4: decisions
 

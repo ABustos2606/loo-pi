@@ -207,9 +207,9 @@ void atoms(const LV2_Descriptor* d)
     malformed.add(128, E::RECORD); // Outside this slice.
     malformed.add(0, E::RECORD, true, 3); // Unallocated loop 2.
     malformed.add(0, 127); // Unknown command.
-    malformed.add(0, E::PAUSE); // Reserved M3 command.
+    malformed.add(0, E::SCRATCH); // Not supported: no scratch position control.
     malformed.send(host);
-    check(host[Port::l1_len][0] == 0 && host[Port::l1_state][0] == 0, "invalid/reserved atoms ignored");
+    check(host[Port::l1_len][0] == 0 && host[Port::l1_state][0] == 0, "invalid/unsupported atoms ignored");
     Events truncated;
     truncated.add(0, E::RECORD);
     --truncated.sequence->atom.size;

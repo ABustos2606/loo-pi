@@ -74,6 +74,17 @@ void run(LV2_Handle handle, uint32_t frames)
         const auto selection = uint32_t(self.control(Port::selected, 1, 1, 8));
         // Commands may select a loop without changing the saved input value.
         if (selection != self.selected_control) { self.loop.select(selection); self.selected_control = selection; }
+        GlobalSettings global;
+        global.quantize = std::round(self.control(Port::quantize, 0, 0, 3));
+        global.round = self.control(Port::round, 0) >= .5f;
+        global.mute_quantized = self.control(Port::mute_quant, 0) >= .5f;
+        global.overdub_quantized = self.control(Port::dub_quant, 0) >= .5f;
+        global.replace_quantized = self.control(Port::repl_quant, 0) >= .5f;
+        global.sync_to = uint32_t(std::lround(self.control(Port::sync_to, 0, 0, 9)));
+        global.relative_sync = self.control(Port::rel_sync, 0) >= .5f;
+        global.eighths = std::round(self.control(Port::eighths, 16, 1, 128));
+        global.bpm = self.control(Port::bpm, 120, 30, 300);
+        self.loop.global(global);
         for (uint32_t n = 0; n < kMaxLoops; ++n) {
             const auto base = kLoopBase + n * kLoopStride;
             const auto ctl = [&](uint32_t p, float fallback) { return self.control(static_cast<Port>(base + p), fallback); };
@@ -83,6 +94,10 @@ void run(LV2_Handle handle, uint32_t frames)
             settings.fade_ms = self.control(Port::fade, 1.3f, 0, 50);
             settings.safety_feedback = self.control(Port::safety_fb, 1) >= .5f;
             settings.play_feedback = ctl(6, 0) >= .5f;
+            settings.sync = ctl(4, 0) >= .5f ? 1 : 0;
+            settings.play_sync = ctl(5, 0) >= .5f;
+            const auto* rate = static_cast<const float*>(self.ports[base + 7]);
+            settings.rate = rate && std::isfinite(*rate) ? std::clamp(*rate, .25f, 4.0f) : 1;
             self.loop.configure(n, settings, self.control(Port::enabled, 1) >= .5f);
         }
         self.dry.set(self.control(Port::dry_level, 1), self.configured ? self.ramp_samples : 0);
@@ -105,7 +120,8 @@ void run(LV2_Handle handle, uint32_t frames)
             self.scratch[0][i] = left && std::isfinite(left[offset + i]) ? left[offset + i] : 0;
             self.scratch[1][i] = right && std::isfinite(right[offset + i]) ? right[offset + i] : 0;
         }
-        nonfinite |= self.loop.process(self.scratch[0].data(), self.scratch[1].data(), self.scratch[2].data(), self.scratch[3].data(), count);
+        nonfinite |= self.loop.process(self.scratch[0].data(), self.scratch[1].data(), self.scratch[2].data(), self.scratch[3].data(), count,
+                                       cycle ? cycle + offset : nullptr, loop ? loop + offset : nullptr);
         for (uint32_t i = 0; i < count; ++i) {
             const auto dry = self.dry.next();
             const float l = self.scratch[0][i] * dry + self.scratch[2][i];
@@ -113,8 +129,6 @@ void run(LV2_Handle handle, uint32_t frames)
             nonfinite |= !std::isfinite(l) || !std::isfinite(r);
             if (out_l) { out_l[offset + i] = l; }
             if (out_r) { out_r[offset + i] = r; }
-            if (cycle) { cycle[offset + i] = 0; }
-            if (loop) { loop[offset + i] = 0; }
         }
         offset += count;
       }
@@ -148,6 +162,8 @@ void run(LV2_Handle handle, uint32_t frames)
     }
 }
 
+// Engine restarts its tempo counter with the engine; Loo-pi with activate.
+void activate(LV2_Handle handle) { static_cast<Instance*>(handle)->loop.activate(); }
 void cleanup(LV2_Handle handle) { delete static_cast<Instance*>(handle); }
 LV2_Worker_Status work(LV2_Handle, LV2_Worker_Respond_Function respond, LV2_Worker_Respond_Handle handle, uint32_t size, const void* data)
 { return LoopSet::work(respond, handle, size, data); }
@@ -156,7 +172,7 @@ LV2_Worker_Status response(LV2_Handle handle, uint32_t size, const void* data)
 const LV2_Worker_Interface worker{work, response, nullptr};
 const void* extension_data(const char* uri)
 { return !std::strcmp(uri, LV2_WORKER__interface) ? &worker : nullptr; }
-const LV2_Descriptor descriptor{kURI, instantiate, connect_port, nullptr, run, nullptr, cleanup, extension_data};
+const LV2_Descriptor descriptor{kURI, instantiate, connect_port, activate, run, nullptr, cleanup, extension_data};
 }
 }
 

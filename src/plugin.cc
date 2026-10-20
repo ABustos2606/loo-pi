@@ -854,6 +854,9 @@ static inline void fillLoops(SooperLooperI *pLS, LoopChunk *mloop, unsigned long
    {
       if (nloop->valid && (nloop->frontfill || nloop->backfill)) {
 	 loop = nloop;
+	 // Loo-pi: beginOverdub's "overdub using self" sets srcloop to the
+	 // chunk itself; stop there instead of descending forever.
+	 if (nloop->srcloop == nloop) break;
 	 continue;
       }
       

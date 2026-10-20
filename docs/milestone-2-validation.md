@@ -74,6 +74,76 @@ changed in this milestone.
 `loop_secs` applies to loops allocated after it changes; loop 1 is allocated
 at instantiation with 40 s, rounded up by the core.
 
+## On the Pi, 20 October 2026
+
+Loo-pi `45c301f` and the matching Peepo interface (working tree on top of
+`31ff8c7`, built under arm64 emulation) were installed on the Pi with a
+targeted copy, not `install.sh`. The PC's arm64 root lacks the GxPlugins and
+Dragonfly bundles installed on the Pi, and `install.sh` replaces the whole
+`/opt/peepo`. Backups are in `/opt/peepo/backup-loopi-20261020/`.
+
+Patch: IN, Loo-pi with 4 loops (40 s each) playing, OUT. JACK at 48 kHz,
+128 frames, 3 periods (`jackd -R -P 70 -d alsa -d hw:CODEC`). The user played
+from the page; nothing was audibly wrong. Measurements were passive: xruns
+counted from JACK's journal (`JackEngine::XRun: client = ingen was not
+finished`), DSP load from a portless JACK client, CPU and RSS from `/proc`,
+telemetry from `strace -f` on the interface's engine socket.
+
+| | Page open (60 s) | Page closed (180 s) |
+|---|---|---|
+| Telemetry to the interface | 1,275 values/s, 203 KiB/s | none |
+| xruns | 4 (4 per minute) | 2 (0.7 per minute) |
+| JACK DSP load, median / peak | 5.0 % / 28.7 % | 4.7 % / 5.2 % |
+| Ingen CPU (one core) / RSS | 15.5 % / 202 MB | 6.4 % / 202 MB |
+| Interface CPU (one core) / RSS | 18.4 % / 14 MB | 0.4 % / 14 MB |
+
+From the engine restart at 06:12 to 06:24, with the page open for at least
+part of the time, JACK logged 18 xruns in 11.5 minutes.
+
+Findings:
+
+- **Loo-pi's audio processing is cheap.** Four playing loops cost Ingen about
+  6 % of one core, with a flat 5 % DSP load.
+- **Telemetry is the cost, not the looping.** Ingen sends every one of the 51
+  monitored outputs (6 per loop for all 8 loops, `selected_out`, `soloed`,
+  `free_mem`) 25 times a second, **whether or not the value changed**. Loops
+  5 to 8, which were not active, were sent as often as the playing loops.
+  The plan's estimate (1,200 values/s) was right; the page contract's
+  assumption that Ingen sends changes only was wrong (corrected in
+  [peepo-page.md](peepo-page.md)). With the page open, Ingen's CPU rises
+  2.4 times, the interface goes from idle to 18 % of a core, the DSP peak goes
+  from 5 % to 29 %, and the xrun rate appears to rise. The xrun counts are
+  small, so that last point is an indication, not a proof.
+- The Pi already had xrun bursts on 19 October with other patches and no
+  Loo-pi (00:28 to 01:08, 14:24 to 15:42, 18:13 to 18:19). Whether the 0.7 per
+  minute with the page closed is Loo-pi's, needs the same measurement with
+  plain IN to OUT (not done yet).
+
+Suggested Peepo-side changes, not made (Peepo is outside this repository's
+work):
+
+1. Subscribe only to the loops that exist (`loops`), plus the three global
+   outputs: 27 outputs instead of 51 with 4 loops, about half the traffic.
+2. If that is not enough, the fallbacks of plan section 6: watch only
+   `lN_pos` for the cards on screen, or an appended atom output in Loo-pi
+   that sends a compact message per loop only when something changes.
+
+Not yet measured on the Pi: the baseline without Loo-pi, the plan's typical
+patch (amp, reverb, Discipline) for 30 minutes with stomps, native
+`rt_timing`.
+
+How to repeat, from the PC (`pedalpi` in `~/.ssh/config`):
+
+- xruns in the last 10 minutes:
+  `ssh pedalpi "journalctl -u peepo-jack --since '-10min' | grep -c XRun"`.
+- Load, CPU and RSS over N seconds: a portless JACK client that samples
+  `cpu_load()` once a second and reads `/proc/<pid>/stat` and `status` for
+  `ingen` and `peepo`. Its xrun callback missed some xruns that JACK logged;
+  count xruns from the journal.
+- Telemetry: `strace -f -p $(pgrep -o -x peepo) -e trace=recvfrom -s 65536`
+  for 20 s, then count the port symbols (`l1_pos` and so on) in the capture.
+  Without `-f` the capture misses the thread that reads the engine socket.
+
 ## Reproduction and remaining gates
 
 Run the commands in the table, as in Milestone 1: source Peepo's
@@ -95,9 +165,11 @@ cannot lock memory; this is a WSL limit, not a Loo-pi result.
 Outstanding, from implementation-plan section 8.4 and the milestone's done
 criteria:
 
-- Four loops played on the Pi from the page and stomps, with xrun count, DSP
-  load, RSS and native `rt_timing` recorded in Peepo's `docs/evidence/`.
-- The telemetry rate with the page open (plan section 6).
+- Four loops played on the Pi from the page: done, see above. Still to do:
+  stomps, the baseline without Loo-pi, the typical patch for 30 minutes and
+  native `rt_timing`. Results are recorded here rather than in Peepo.
+- The telemetry rate with the page open: measured, see above. Reducing it is
+  a Peepo change.
 - Tag `v0.2.0` on the reviewed commit after the hardware gate, then pin it in
   Peepo's build (`tools/ingen-spike/14-more-plugins.sh`,
   `reference/manifest.json`). The `v0.0.1` and `v0.1.0` tags are not created

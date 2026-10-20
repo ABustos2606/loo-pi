@@ -152,7 +152,7 @@ Settled with the user on 19 October 2026:
 | Saving loops | Loops are lost on reload. LV2 state could write each loop to a WAV file beside the patch, outside `run()` | Milestone 4 |
 | Separate loop outputs | Beebo plans "individual loop in and outs"; SooperLooper has them | Milestone 4 |
 | MIDI binding and MIDI clock | Beebo binds commands to MIDI and syncs to MIDI clock; Peepo has no MIDI yet | When Peepo has MIDI |
-| Telemetry load | 8 loops x 6 outputs at 25 Hz is 1,200 values a second to the interface | Milestone 2, measured on the Pi |
+| Telemetry load | 8 loops x 6 outputs at 25 Hz is 1,200 values a second to the interface | Measured 20 October 2026: 1,275 values/s, sent unchanged or not; raises Ingen and interface CPU and the DSP peak ([evidence](milestone-2-validation.md#on-the-pi-20-october-2026)). Peepo should subscribe only to existing loops |
 
 ## Milestones
 
@@ -160,5 +160,5 @@ Settled with the user on 19 October 2026:
 - [ ] Milestone 0: the plain Makefile, the LV2 glue and `.ttl` with the full port list, building only the core. Loo-pi loads in jalv and in Ingen under WSL. Implemented; desktop validation passes, physical Pi and release checks remain ([evidence](milestone-0-validation.md)).
 - [ ] Milestone 1: one stereo loop through the multi-loop layer: Record, Overdub, Rec/Dub, Mute, Undo, Redo, Clear, Trigger, press, release and long press, levels, feedback, threshold, bypass, the real-time fixes. Implemented; desktop and emulated arm64 checks pass, physical Pi and release checks remain ([evidence](milestone-1-validation.md)).
 - [ ] Milestone 2: several loops: Loops and the worker, selected loop and targets, Solo, Next and Previous, the Commands input, the per-loop outputs. Peepo's Loo-pi page, first version. Implemented; physical Pi/xrun, telemetry and release gates remain ([evidence](milestone-2-validation.md)).
-- [ ] Milestone 3: the rest of the commands (Multiply, Insert, Replace, Substitute, Reverse, Once, Pause, Delay), Quantize, sync to Tempo and to a loop, Rate, the clock outputs. The page complete, with stomp binding.
+- [ ] Milestone 3: the rest of the commands (Multiply, Insert, Replace, Substitute, Reverse, Once, Pause, Delay), Quantize, sync to Tempo and to a loop, Rate, the clock outputs. The page complete, with stomp binding. Implemented in Loo-pi and in Peepo's page; Pi listening and release remain ([evidence](milestone-3-validation.md)).
 - [ ] Milestone 4: saving loops, then decide separate loop outputs and MIDI.

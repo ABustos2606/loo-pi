@@ -52,7 +52,7 @@ void audio(const LV2_Descriptor* d)
     for (auto p : {Port::in_l, Port::in_r, Port::out_l, Port::out_r, Port::cycle_clock, Port::loop_clock}) {
         d->connect_port(host.handle, index(p), host[p].data());
     }
-    // M3 controls remain inert; multi-loop routing is checked separately.
+    // Pause on an empty loop does nothing; multi-loop routing is checked separately.
     host[Port::pause][0] = 1;
     host.run(128);
     check(host[Port::selected_out][0] == 1 && host[Port::soloed][0] == 0, "idle selection");
